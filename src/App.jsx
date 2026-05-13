@@ -107,13 +107,50 @@ function timeToFrac(timeStr) {
 export default function CamilleNaps() {
   useLauncherIcon();
   const [view, setView] = useState("nanny"); // "nanny" | "coach"
-  const [wakeTime, setWakeTime] = useState("07:00");
-  const [naps, setNaps] = useState([
+  // ── helpers para persistir en localStorage ───────────────────
+  const TODAY = new Date().toISOString().slice(0, 10); // "2026-05-13"
+  const STORAGE_KEY = `camille-naps-${TODAY}`;
+
+  function loadSaved() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }
+
+  function saveTodayData(wake, napsData, bed) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
+    } catch {}
+  }
+
+  const saved = loadSaved();
+
+  const [wakeTime, setWakeTimeRaw] = useState(saved?.wakeTime || "07:00");
+  const [naps, setNapsRaw] = useState(saved?.naps || [
     { asleepAt: null, wokeAt: null, long: null },
     { asleepAt: null, wokeAt: null, long: null },
   ]);
-  const [bedAsleep, setBedAsleep] = useState(null);
+  const [bedAsleep, setBedAsleepRaw] = useState(saved?.bedAsleep || null);
   const chartRef = useRef(null);
+
+  // Wrappers que guardan al mismo tiempo
+  function setWakeTime(val) {
+    setWakeTimeRaw(val);
+    saveTodayData(val, naps, bedAsleep);
+  }
+  function setNaps(updater) {
+    setNapsRaw(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      saveTodayData(wakeTime, next, bedAsleep);
+      return next;
+    });
+  }
+  function setBedAsleep(val) {
+    setBedAsleepRaw(val);
+    saveTodayData(wakeTime, naps, val);
+  }
 
   // Compute schedule from wake time + actual nap data
   function getSchedule() {
@@ -333,8 +370,8 @@ export default function CamilleNaps() {
                       <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8, fontStyle: "italic" }}>
                         Registrar lo que pasó:
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0 }}>
-                        <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                        <div style={{ minWidth: 0, overflow: "hidden" }}>
                           <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
                           <input
                             type="time"
@@ -343,7 +380,7 @@ export default function CamilleNaps() {
                             style={timeInputStyle}
                           />
                         </div>
-                        <div style={{ minWidth: 0 }}>
+                        <div style={{ minWidth: 0, overflow: "hidden" }}>
                           <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Despertó a las</div>
                           <input
                             type="time"
@@ -391,6 +428,33 @@ export default function CamilleNaps() {
             <div style={{ fontSize: 12, color: "#4B5563", textAlign: "center", marginTop: 8, fontStyle: "italic" }}>
               Rutina de entrada: 15 min antes de la hora objetivo
             </div>
+            <button
+              onClick={() => {
+                if (window.confirm("¿Resetear el día? Se borrará todo el progreso de hoy.")) {
+                  localStorage.removeItem(STORAGE_KEY);
+                  setWakeTimeRaw("07:00");
+                  setNapsRaw([
+                    { asleepAt: null, wokeAt: null, long: null },
+                    { asleepAt: null, wokeAt: null, long: null },
+                  ]);
+                  setBedAsleepRaw(null);
+                }
+              }}
+              style={{
+                width: "100%",
+                marginTop: 12,
+                padding: "10px",
+                background: "none",
+                border: "1.5px solid #E5E7EB",
+                borderRadius: 12,
+                fontSize: 13,
+                color: "#9CA3AF",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              🔄 Resetear día
+            </button>
           </div>
         )}
 
@@ -754,6 +818,7 @@ function Card({ children, style = {}, ref }) {
       border: "1px solid #E5E7EB",
       boxSizing: "border-box",
       width: "100%",
+      overflow: "hidden",
       ...style,
     }}>
       {children}
@@ -788,10 +853,11 @@ function TimeBox({ icon, label, time, highlight }) {
 
 const timeInputStyle = {
   width: "100%",
-  padding: "10px 10px",
+  maxWidth: "100%",
+  padding: "10px 6px",
   border: "2px solid #E5E7EB",
   borderRadius: 12,
-  fontSize: 16,
+  fontSize: 15,
   fontFamily: "inherit",
   color: "#111827",
   fontWeight: 700,
@@ -800,4 +866,7 @@ const timeInputStyle = {
   outline: "none",
   minWidth: 0,
   display: "block",
+  WebkitAppearance: "none",
+  appearance: "none",
+  overflow: "hidden",
 };
