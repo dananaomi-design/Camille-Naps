@@ -1,4 +1,55 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+
+// ── Supabase ──────────────────────────────────────────────────
+const SUPABASE_URL = "https://ppxwgapyzbfusfkbjxmo.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Kp9_x2lVHzReRYmWSGd8Sg_VrQdKIhC";
+
+async function sbGet(date) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/nap_logs?log_date=eq.${date}&select=*`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  const data = await res.json();
+  return data?.[0] || null;
+}
+
+async function sbUpsert(date, wake, napsData, bed) {
+  await fetch(`${SUPABASE_URL}/rest/v1/nap_logs`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates",
+    },
+    body: JSON.stringify({
+      log_date: date,
+      wake_time: wake,
+      naps: napsData,
+      bed_asleep: bed,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  // También guardamos en localStorage como caché offline
+  try {
+    localStorage.setItem(`camille-naps-${date}`, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
+  } catch {}
+}
+
+async function sbGetWeek() {
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const from = days[0];
+  const to = days[days.length - 1];
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/nap_logs?log_date=gte.${from}&log_date=lte.${to}&select=*&order=log_date.asc`,
+    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+  );
+  return await res.json();
+}
 
 // ── Constants ────────────────────────────────────────────────
 const WINDOWS = [
@@ -6,7 +57,7 @@ const WINDOWS = [
   { label: "Siesta 2", windowMin: 220, color: "#43A047" },
   { label: "Noche",    windowMin: 180, color: "#7C4DFF" },
 ];
-const ROUTINE_MIN = 15;
+const ROUTINE_MIN = 30;
 
 function addMinutes(timeStr, mins) {
   const [h, m] = timeStr.split(":").map(Number);
@@ -37,33 +88,60 @@ function timeToFrac(timeStr) {
 // ── Main Component ────────────────────────────────────────────
 export default function CamilleNaps() {
   const [view, setView] = useState("nanny"); // "nanny" | "coach"
-  // ── helpers para persistir en localStorage ───────────────────
-  const TODAY = new Date().toISOString().slice(0, 10); // "2026-05-13"
-  const STORAGE_KEY = `camille-naps-${TODAY}`;
+  // ── Supabase sync ─────────────────────────────────────────────
+  const TODAY = new Date().toISOString().slice(0, 10);
+  const [syncing, setSyncing] = useState(false);
+  const [weekData, setWeekData] = useState([]);
 
-  function loadSaved() {
+  // Carga inicial desde Supabase (con fallback a localStorage)
+  function loadLocalFallback() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(`camille-naps-${TODAY}`);
       if (raw) return JSON.parse(raw);
     } catch {}
     return null;
   }
 
-  function saveTodayData(wake, napsData, bed) {
+  async function saveTodayData(wake, napsData, bed) {
+    // Guarda local inmediatamente para no perder datos
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
+      localStorage.setItem(`camille-naps-${TODAY}`, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
+    } catch {}
+    // Sincroniza con Supabase en background
+    try { await sbUpsert(TODAY, wake, napsData, bed); } catch {}
+  }
+
+  async function loadWeek() {
+    try {
+      const rows = await sbGetWeek();
+      setWeekData(Array.isArray(rows) ? rows : []);
     } catch {}
   }
 
-  const saved = loadSaved();
+  const EMPTY_NAPS = [
+    { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
+    { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
+  ];
 
-  const [wakeTime, setWakeTimeRaw] = useState(saved?.wakeTime || "07:00");
-  const [naps, setNapsRaw] = useState(saved?.naps || [
-    { asleepAt: null, wokeAt: null, long: null },
-    { asleepAt: null, wokeAt: null, long: null },
-  ]);
-  const [bedAsleep, setBedAsleepRaw] = useState(saved?.bedAsleep || null);
+  const localFallback = loadLocalFallback();
+  const [wakeTime, setWakeTimeRaw] = useState(localFallback?.wakeTime || "07:00");
+  const [naps, setNapsRaw] = useState(localFallback?.naps || EMPTY_NAPS);
+  const [bedAsleep, setBedAsleepRaw] = useState(localFallback?.bedAsleep || null);
   const chartRef = useRef(null);
+
+  // Al montar: carga desde Supabase y sobreescribe si hay datos más recientes
+  useEffect(() => {
+    setSyncing(true);
+    sbGet(TODAY).then(row => {
+      if (row) {
+        setWakeTimeRaw(row.wake_time || "07:00");
+        setNapsRaw(row.naps || EMPTY_NAPS);
+        setBedAsleepRaw(row.bed_asleep || null);
+      }
+      setSyncing(false);
+    }).catch(() => setSyncing(false));
+    loadWeek();
+  }, []);
 
   // Wrappers que guardan al mismo tiempo
   function setWakeTime(val) {
@@ -82,50 +160,104 @@ export default function CamilleNaps() {
     saveTodayData(wakeTime, naps, val);
   }
 
+  // ── Helpers de tiempo ────────────────────────────────────────
+  function timeToMin(t) {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  }
+
+  // Si la Siesta 2 empujaría la noche a más de las 20:00, se omite
+  // y la noche se adelanta al máximo temprano posible (17:30 = 5:30pm)
+  const BEDTIME_CUTOFF_MIN = 20 * 60; // 8:00 pm
+  const EARLIEST_BED_MIN   = 17 * 60 + 30; // 5:30 pm
+
   // Compute schedule from wake time + actual nap data
   function getSchedule() {
     const schedule = [];
     let currentWake = wakeTime;
 
-    for (let i = 0; i < 3; i++) {
-      const win = WINDOWS[i];
-      const isNight = i === 2;
+    // ── Siesta 1 ──────────────────────────────────────────────
+    const win0 = WINDOWS[0];
+    const sleepTarget0 = addMinutes(currentWake, win0.windowMin);
+    const enterRoom0   = addMinutes(sleepTarget0, -ROUTINE_MIN);
+    const actual0      = naps[0]?.asleepAt;
+    const woke0        = naps[0]?.wokeAt;
+    const nap1DNH      = naps[0]?.didNotHappen;
+    schedule.push({
+      label: win0.label, color: win0.color,
+      windowMin: win0.windowMin,
+      enterRoom: enterRoom0, sleepTarget: sleepTarget0,
+      actual: actual0, woke: woke0, long: naps[0]?.long,
+      currentWake, skip: false, didNotHappen: nap1DNH,
+    });
+    // Si no ocurrió siesta 1: currentWake sigue siendo el despertar de mañana
+    // la ventana de siesta 2 se calcula desde ese mismo despertar acumulando horas
+    if (nap1DNH) {
+      // no cambia currentWake — ya lleva el tiempo despierta desde la mañana
+    } else if (woke0)        currentWake = woke0;
+    else if (actual0) currentWake = addMinutes(actual0, 60);
+    else              currentWake = addMinutes(sleepTarget0, 75);
 
-      // Adjust window if previous nap was short (only for nap 2)
-      let windowMin = win.windowMin;
-      if (i === 1 && naps[0].long === false) windowMin = Math.max(windowMin - 20, 150);
-
-      const sleepTarget = addMinutes(currentWake, windowMin);
-      const enterRoom   = addMinutes(sleepTarget, -ROUTINE_MIN);
-
-      const actual = isNight ? bedAsleep : naps[i]?.asleepAt;
-      const woke   = isNight ? null : naps[i]?.wokeAt;
-      const long   = isNight ? null : naps[i]?.long;
-
-      schedule.push({
-        label: win.label,
-        color: win.color,
-        windowMin,
-        enterRoom,
-        sleepTarget,
-        actual,
-        woke,
-        long,
-        currentWake,
-      });
-
-      // next wake = actual wake from nap, or estimated
-      if (!isNight) {
-        if (woke) {
-          currentWake = woke;
-        } else if (actual) {
-          // estimate: asleep + 60 min if no wake recorded
-          currentWake = addMinutes(actual, 60);
-        } else {
-          currentWake = addMinutes(sleepTarget, 75);
-        }
-      }
+    // ── Siesta 2: calcular si conviene ───────────────────────
+    const win1 = WINDOWS[1];
+    let windowMin1 = win1.windowMin;
+    // Si siesta 1 no ocurrió, ventana se recalcula desde el despertar original
+    // sumando horas que lleva despierta (ventana 1 + ventana 2)
+    if (nap1DNH) {
+      windowMin1 = win0.windowMin + win1.windowMin;
+    } else if (naps[0].long === false) {
+      windowMin1 = Math.max(windowMin1 - 20, 150);
     }
+
+    const sleepTarget1    = addMinutes(nap1DNH ? wakeTime : currentWake, windowMin1);
+    const enterRoom1      = addMinutes(sleepTarget1, -ROUTINE_MIN);
+    const estWake1        = addMinutes(sleepTarget1, 75);
+    const win2            = WINDOWS[2];
+    const projectedBedMin = timeToMin(addMinutes(estWake1, win2.windowMin));
+    const skipNap2        = !nap1DNH && projectedBedMin > BEDTIME_CUTOFF_MIN;
+
+    const actual1 = naps[1]?.asleepAt;
+    const woke1   = naps[1]?.wokeAt;
+    const nap2DNH = naps[1]?.didNotHappen;
+    schedule.push({
+      label: win1.label, color: win1.color,
+      windowMin: windowMin1,
+      enterRoom: enterRoom1, sleepTarget: sleepTarget1,
+      actual: actual1, woke: woke1, long: naps[1]?.long,
+      currentWake: nap1DNH ? wakeTime : currentWake,
+      skip: skipNap2, didNotHappen: nap2DNH,
+      projectedBed: addMinutes(estWake1, win2.windowMin),
+    });
+
+    if (!skipNap2 && !nap2DNH) {
+      if (woke1)        currentWake = woke1;
+      else if (actual1) currentWake = addMinutes(actual1, 60);
+      else              currentWake = nap1DNH ? addMinutes(wakeTime, windowMin1 + 75) : addMinutes(sleepTarget1, 75);
+    }
+
+    // ── Noche ─────────────────────────────────────────────────
+    // Ventana normal desde el último despertar
+    let sleepTarget2 = addMinutes(currentWake, win2.windowMin);
+
+    // Si se saltó Siesta 2: noche = max(último despertar + 4h, 5:30pm)
+    if (skipNap2) {
+      const fromWake = addMinutes(currentWake, 4 * 60); // despertar + 4h (ventana máxima)
+      const fromWakeMin = timeToMin(fromWake);
+      const finalMin = Math.max(fromWakeMin, EARLIEST_BED_MIN);
+      const hh = Math.floor(finalMin / 60);
+      const mm = finalMin % 60;
+      sleepTarget2 = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+    }
+    const enterRoom2   = addMinutes(sleepTarget2, -ROUTINE_MIN);
+
+    schedule.push({
+      label: win2.label, color: win2.color,
+      windowMin: win2.windowMin,
+      enterRoom: enterRoom2, sleepTarget: sleepTarget2,
+      actual: bedAsleep, woke: null, long: null,
+      currentWake, skip: false,
+    });
+
     return schedule;
   }
 
@@ -134,7 +266,7 @@ export default function CamilleNaps() {
   function recordNapAsleep(i, time) {
     setNaps(prev => {
       const n = [...prev];
-      n[i] = { ...n[i], asleepAt: time };
+      n[i] = { ...n[i], asleepAt: time, didNotHappen: false };
       return n;
     });
   }
@@ -149,6 +281,30 @@ export default function CamilleNaps() {
     });
   }
 
+  function recordTimeToFallAsleep(i, mins) {
+    setNaps(prev => {
+      const n = [...prev];
+      n[i] = { ...n[i], timeToFallAsleep: mins ? parseInt(mins) : null };
+      return n;
+    });
+  }
+
+  function markDidNotHappen(i) {
+    setNaps(prev => {
+      const n = [...prev];
+      n[i] = { asleepAt: null, wokeAt: null, long: null, didNotHappen: true };
+      return n;
+    });
+  }
+
+  function clearNap(i) {
+    setNaps(prev => {
+      const n = [...prev];
+      n[i] = { asleepAt: null, wokeAt: null, long: null, didNotHappen: false };
+      return n;
+    });
+  }
+
   // ── Coach Chart Data ─────────────────────────────────────────
   function buildTimeline() {
     const events = [];
@@ -158,6 +314,7 @@ export default function CamilleNaps() {
 
     schedule.forEach((s, i) => {
       if (i < 2) {
+        if (s.didNotHappen) return; // no mostrar en el gráfico
         const sleepStart = s.actual || s.sleepTarget;
         const sleepEnd   = s.woke || addMinutes(sleepStart, s.long === false ? 40 : 75);
         events.push({
@@ -208,7 +365,7 @@ export default function CamilleNaps() {
                 Camille
               </div>
               <div style={{ fontSize: 12, color: "#6B7280", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                14 meses · Rastreador de sueño
+                14 meses · Rastreador de sueño {syncing ? "· ⏳ sincronizando..." : "· ☁️ sincronizado"}
               </div>
             </div>
           </div>
@@ -256,85 +413,181 @@ export default function CamilleNaps() {
             {/* Nap cards */}
             {schedule.map((s, i) => {
               const isNight = i === 2;
-              const nap = naps[i];
+              const nap = naps[i] || {};
 
               return (
-                <Card key={i} style={{ borderLeft: `4px solid ${s.color}` }}>
+                <Card key={i} style={{ borderLeft: `4px solid ${s.skip ? "#D1D5DB" : s.color}`, opacity: s.skip ? 0.6 : 1 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{s.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: s.skip ? "#9CA3AF" : "#111827" }}>{s.label}</div>
                       <div style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>
                         Ventana: {Math.floor(s.windowMin / 60)}h {s.windowMin % 60 > 0 ? `${s.windowMin % 60}m` : ""}
                       </div>
                     </div>
                     <div style={{
-                      background: s.color + "30",
+                      background: s.skip ? "#F3F4F6" : s.color + "30",
                       borderRadius: 20,
                       padding: "4px 12px",
                       fontSize: 12,
-                      color: s.color,
+                      color: s.skip ? "#9CA3AF" : s.color,
                       fontWeight: 700,
                     }}>
-                      {isNight ? "🌙 Noche" : `Siesta ${i + 1}`}
+                      {isNight ? "🌙 Noche" : s.skip ? "⏭ Saltar" : `Siesta ${i + 1}`}
                     </div>
                   </div>
 
-                  {/* Calculated times */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
-                    <TimeBox
-                      icon="🚪"
-                      label="Entrar al cuarto"
-                      time={s.enterRoom}
-                      highlight
-                    />
-                    <TimeBox
-                      icon="😴"
-                      time={s.sleepTarget}
-                      label="Debe dormirse"
-                    />
-                  </div>
+                  {/* Skip warning for Nap 2 */}
+                  {s.skip && (
+                    <div style={{
+                      marginTop: 10,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "#FEF3C7",
+                      color: "#92400E",
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}>
+                      ⚠️ Si hace esta siesta la noche caería después de las 7:30 pm. <strong>No hacer Siesta 2</strong> — la hora de dormir se calcula desde el último despertar.
+                    </div>
+                  )}
 
-                  {/* Actual recording (naps only) */}
-                  {!isNight && (
+                  {/* Calculated times — hide for skipped nap */}
+                  {!s.skip && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
+                      <TimeBox icon="🚪" label="Entrar al cuarto" time={s.enterRoom} highlight />
+                      <TimeBox icon="😴" time={s.sleepTarget} label="Debe dormirse" />
+                    </div>
+                  )}
+
+                  {/* Actual recording (naps only, not skipped) */}
+                  {!isNight && !s.skip && (
                     <div style={{ marginTop: 14, borderTop: "1px solid #E5E7EB", paddingTop: 14 }}>
-                      <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8, fontStyle: "italic" }}>
-                        Registrar lo que pasó:
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0, overflow: "hidden" }}>
-                        <div style={{ minWidth: 0, overflow: "hidden" }}>
-                          <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
-                          <input
-                            type="time"
-                            value={nap.asleepAt || ""}
-                            onChange={e => recordNapAsleep(i, e.target.value)}
-                            style={timeInputStyle}
-                          />
-                        </div>
-                        <div style={{ minWidth: 0, overflow: "hidden" }}>
-                          <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Despertó a las</div>
-                          <input
-                            type="time"
-                            value={nap.wokeAt || ""}
-                            onChange={e => recordNapWoke(i, e.target.value)}
-                            style={timeInputStyle}
-                          />
-                        </div>
-                      </div>
 
-                      {nap.long !== null && (
-                        <div style={{
-                          marginTop: 10,
-                          padding: "8px 12px",
-                          borderRadius: 10,
-                          background: nap.long ? "#D1FAE5" : "#FEF3C7",
-                          color: nap.long ? "#065F46" : "#92400E",
-                          fontSize: 13,
-                          fontWeight: 600,
-                        }}>
-                          {nap.long
-                            ? `✅ Siesta larga (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ventanas normales`
-                            : `⚠️ Siesta corta (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ajustando ventana siguiente`}
+                      {/* Did not happen state */}
+                      {s.didNotHappen ? (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <div style={{
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            background: "#FEE2E2",
+                            color: "#991B1B",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            flex: 1,
+                            marginRight: 8,
+                          }}>
+                            ❌ Siesta no ocurrió
+                          </div>
+                          <button
+                            onClick={() => clearNap(i)}
+                            style={{
+                              padding: "8px 12px",
+                              border: "1.5px solid #E5E7EB",
+                              borderRadius: 10,
+                              background: "white",
+                              fontSize: 12,
+                              color: "#6B7280",
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                              whiteSpace: "nowrap",
+                            }}>
+                            Deshacer
+                          </button>
                         </div>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8, fontStyle: "italic" }}>
+                            Registrar lo que pasó:
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                            <div style={{ minWidth: 0, overflow: "hidden" }}>
+                              <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
+                              <input
+                                type="time"
+                                value={nap.asleepAt || ""}
+                                onChange={e => recordNapAsleep(i, e.target.value)}
+                                style={timeInputStyle}
+                              />
+                            </div>
+                            <div style={{ minWidth: 0, overflow: "hidden" }}>
+                              <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Despertó a las</div>
+                              <input
+                                type="time"
+                                value={nap.wokeAt || ""}
+                                onChange={e => recordNapWoke(i, e.target.value)}
+                                style={timeInputStyle}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Time to fall asleep */}
+                          <div style={{ marginTop: 8, minWidth: 0 }}>
+                            <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Tiempo en dormirla (min)</div>
+                            <input
+                              type="number"
+                              min="0"
+                              max="120"
+                              placeholder="ej. 15"
+                              value={nap.timeToFallAsleep || ""}
+                              onChange={e => recordTimeToFallAsleep(i, e.target.value)}
+                              style={{ ...timeInputStyle, fontSize: 16 }}
+                            />
+                          </div>
+
+                          {/* Clear fields button */}
+                          {(nap.asleepAt || nap.wokeAt) && (
+                            <button
+                              onClick={() => clearNap(i)}
+                              style={{
+                                marginTop: 8,
+                                padding: "6px 12px",
+                                border: "1.5px solid #E5E7EB",
+                                borderRadius: 8,
+                                background: "white",
+                                fontSize: 12,
+                                color: "#9CA3AF",
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                              }}>
+                              🗑 Limpiar campos
+                            </button>
+                          )}
+
+                          {nap.long !== null && (
+                            <div style={{
+                              marginTop: 10,
+                              padding: "8px 12px",
+                              borderRadius: 10,
+                              background: nap.long ? "#D1FAE5" : "#FEF3C7",
+                              color: nap.long ? "#065F46" : "#92400E",
+                              fontSize: 13,
+                              fontWeight: 600,
+                            }}>
+                              {nap.long
+                                ? `✅ Siesta larga (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ventanas normales`
+                                : `⚠️ Siesta corta (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ajustando ventana siguiente`}
+                            </div>
+                          )}
+
+                          {/* Did not happen button */}
+                          <button
+                            onClick={() => markDidNotHappen(i)}
+                            style={{
+                              marginTop: 10,
+                              width: "100%",
+                              padding: "8px",
+                              border: "1.5px dashed #FCA5A5",
+                              borderRadius: 10,
+                              background: "white",
+                              fontSize: 13,
+                              color: "#EF4444",
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                              fontWeight: 600,
+                            }}>
+                            ❌ Siesta no ocurrió
+                          </button>
+                        </>
                       )}
                     </div>
                   )}
@@ -356,18 +609,16 @@ export default function CamilleNaps() {
             })}
 
             <div style={{ fontSize: 12, color: "#4B5563", textAlign: "center", marginTop: 8, fontStyle: "italic" }}>
-              Rutina de entrada: 15 min antes de la hora objetivo
+              Rutina de entrada: 30 min antes de la hora objetivo
             </div>
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (window.confirm("¿Resetear el día? Se borrará todo el progreso de hoy.")) {
-                  localStorage.removeItem(STORAGE_KEY);
+                  try { localStorage.removeItem(`camille-naps-${TODAY}`); } catch {}
                   setWakeTimeRaw("07:00");
-                  setNapsRaw([
-                    { asleepAt: null, wokeAt: null, long: null },
-                    { asleepAt: null, wokeAt: null, long: null },
-                  ]);
+                  setNapsRaw(EMPTY_NAPS);
                   setBedAsleepRaw(null);
+                  await sbUpsert(TODAY, "07:00", EMPTY_NAPS, null);
                 }
               }}
               style={{
@@ -515,6 +766,53 @@ export default function CamilleNaps() {
                   </div>
                 );
               })}
+            </Card>
+
+            {/* Weekly history */}
+            <Card>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
+                📆 Historial de la semana
+              </div>
+              {(() => {
+                const days = [];
+                for (let i = 6; i >= 0; i--) {
+                  const d = new Date();
+                  d.setDate(d.getDate() - i);
+                  const dateStr = d.toISOString().slice(0, 10);
+                  const isToday = i === 0;
+                  const row = weekData.find(r => r.log_date === dateStr);
+                  days.push({ date: d, row, isToday });
+                }
+                return days.map(({ date, row, isToday }, idx) => {
+                  const label = isToday ? "Hoy" : date.toLocaleDateString("es-ES", { weekday: "short", day: "numeric" });
+                  const wake = row?.wake_time;
+                  const bed = row?.bed_asleep;
+                  const napData = row?.naps || [];
+                  let totalNapMins = 0;
+                  napData.forEach(n => {
+                    if (n.asleepAt && n.wokeAt && !n.didNotHappen)
+                      totalNapMins += diffMinutes(n.asleepAt, n.wokeAt);
+                  });
+                  const hasData = !!wake;
+                  return (
+                    <div key={idx} style={{
+                      display: "grid",
+                      gridTemplateColumns: "60px 1fr 1fr 1fr",
+                      gap: 6,
+                      padding: "8px 0",
+                      borderBottom: idx < 6 ? "1px solid #F3F4F6" : "none",
+                      opacity: hasData ? 1 : 0.4,
+                      fontSize: 12,
+                      alignItems: "center",
+                    }}>
+                      <div style={{ fontWeight: isToday ? 700 : 500, color: isToday ? "#7C4DFF" : "#374151" }}>{label}</div>
+                      <div style={{ color: "#6B7280" }}>☀️ {wake ? formatTime(wake) : "—"}</div>
+                      <div style={{ color: "#6B7280" }}>💤 {totalNapMins > 0 ? `${Math.floor(totalNapMins/60)}h${totalNapMins%60}m` : "—"}</div>
+                      <div style={{ color: "#6B7280" }}>🌙 {bed ? formatTime(bed) : "—"}</div>
+                    </div>
+                  );
+                });
+              })()}
             </Card>
 
             {/* Export button */}
@@ -719,12 +1017,17 @@ function buildExportText(schedule, naps, wakeTime, bedAsleep) {
   naps.forEach((nap, i) => {
     const s = schedule[i];
     text += `${s.label}:\n`;
-    text += `  · Objetivo: ${formatTime(s.sleepTarget)}\n`;
-    text += `  · Se durmió: ${nap.asleepAt ? formatTime(nap.asleepAt) : "—"}\n`;
-    text += `  · Despertó: ${nap.wokeAt ? formatTime(nap.wokeAt) : "—"}\n`;
-    if (nap.asleepAt && nap.wokeAt) {
-      const dur = diffMinutes(nap.asleepAt, nap.wokeAt);
-      text += `  · Duración: ${dur} min (${dur >= 60 ? "✅ larga" : "⚠️ corta"})\n`;
+    if (nap.didNotHappen) {
+      text += `  · No ocurrió\n`;
+    } else {
+      text += `  · Objetivo: ${formatTime(s.sleepTarget)}\n`;
+      text += `  · Se durmió: ${nap.asleepAt ? formatTime(nap.asleepAt) : "—"}\n`;
+      text += `  · Despertó: ${nap.wokeAt ? formatTime(nap.wokeAt) : "—"}\n`;
+      if (nap.timeToFallAsleep) text += `  · Tiempo en dormirla: ${nap.timeToFallAsleep} min\n`;
+      if (nap.asleepAt && nap.wokeAt) {
+        const dur = diffMinutes(nap.asleepAt, nap.wokeAt);
+        text += `  · Duración: ${dur} min (${dur >= 60 ? "✅ larga" : "⚠️ corta"})\n`;
+      }
     }
     text += "\n";
   });
