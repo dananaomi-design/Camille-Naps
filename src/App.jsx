@@ -1,4 +1,36 @@
 import { useState, useRef, useEffect } from "react";
+import React from "react";
+
+// ── Error Boundary ────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return (
+      <div style={{ padding: 32, textAlign: "center", fontFamily: "sans-serif" }}>
+        <div style={{ fontSize: 48 }}>😴</div>
+        <div style={{ fontSize: 18, fontWeight: 700, marginTop: 16, color: "#111827" }}>Algo salió mal</div>
+        <div style={{ fontSize: 14, color: "#6B7280", marginTop: 8 }}>Toca el botón para recargar la app</div>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            marginTop: 20, padding: "12px 24px",
+            background: "#7C4DFF", color: "white", border: "none",
+            borderRadius: 12, fontSize: 15, fontWeight: 700,
+            cursor: "pointer", fontFamily: "sans-serif",
+          }}>
+          🔄 Recargar
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+// ── Wrap export with ErrorBoundary ────────────────────────────
+function CamilleNapsWrapped() {
+  return <ErrorBoundary><CamilleNaps /></ErrorBoundary>;
+}
 
 // ── Supabase ──────────────────────────────────────────────────
 const SUPABASE_URL = "https://ppxwgapyzbfusfkbjxmo.supabase.co";
@@ -86,7 +118,8 @@ function timeToFrac(timeStr) {
 }
 
 // ── Main Component ────────────────────────────────────────────
-export default function CamilleNaps() {
+export default CamilleNapsWrapped;
+function CamilleNaps() {
   const [view, setView] = useState("nanny"); // "nanny" | "coach"
   // ── Supabase sync ─────────────────────────────────────────────
   const TODAY = new Date().toISOString().slice(0, 10);
@@ -129,35 +162,45 @@ export default function CamilleNaps() {
   const [bedAsleep, setBedAsleepRaw] = useState(localFallback?.bedAsleep || null);
   const chartRef = useRef(null);
 
+  // Refs para siempre tener los valores actuales en los closures
+  const wakeTimeRef = useRef(wakeTime);
+  const napsRef = useRef(naps);
+  const bedAsleepRef = useRef(bedAsleep);
+  useEffect(() => { wakeTimeRef.current = wakeTime; }, [wakeTime]);
+  useEffect(() => { napsRef.current = naps; }, [naps]);
+  useEffect(() => { bedAsleepRef.current = bedAsleep; }, [bedAsleep]);
+
   // Al montar: carga desde Supabase y sobreescribe si hay datos más recientes
   useEffect(() => {
     setSyncing(true);
     sbGet(TODAY).then(row => {
-      if (row) {
-        setWakeTimeRaw(row.wake_time || "07:00");
-        setNapsRaw(row.naps || EMPTY_NAPS);
-        setBedAsleepRaw(row.bed_asleep || null);
-      }
+      try {
+        if (row && !row.error) {
+          if (row.wake_time) setWakeTimeRaw(row.wake_time);
+          if (row.naps && Array.isArray(row.naps)) setNapsRaw(row.naps);
+          if (row.bed_asleep) setBedAsleepRaw(row.bed_asleep);
+        }
+      } catch {}
       setSyncing(false);
     }).catch(() => setSyncing(false));
     loadWeek();
   }, []);
 
-  // Wrappers que guardan al mismo tiempo
+  // Wrappers que guardan al mismo tiempo usando refs para evitar stale closures
   function setWakeTime(val) {
     setWakeTimeRaw(val);
-    saveTodayData(val, naps, bedAsleep);
+    saveTodayData(val, napsRef.current, bedAsleepRef.current);
   }
   function setNaps(updater) {
     setNapsRaw(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      saveTodayData(wakeTime, next, bedAsleep);
+      saveTodayData(wakeTimeRef.current, next, bedAsleepRef.current);
       return next;
     });
   }
   function setBedAsleep(val) {
     setBedAsleepRaw(val);
-    saveTodayData(wakeTime, naps, val);
+    saveTodayData(wakeTimeRef.current, napsRef.current, val);
   }
 
   // ── Helpers de tiempo ────────────────────────────────────────
