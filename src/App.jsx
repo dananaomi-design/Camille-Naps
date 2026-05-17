@@ -70,9 +70,7 @@ async function sbUpsert(date, wake, napsData, bed) {
 async function sbGetWeek() {
   const days = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    days.push(d.toISOString().slice(0, 10));
+    days.push(getLimaDateOffset(-i));
   }
   const from = days[0];
   const to = days[days.length - 1];
@@ -83,7 +81,20 @@ async function sbGetWeek() {
   return await res.json();
 }
 
-// ── Constants ────────────────────────────────────────────────
+// ── Timezone fix: siempre usar hora de Lima (UTC-5) ──────────
+function getLimaDate() {
+  const now = new Date();
+  // Lima es UTC-5
+  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  return lima.toISOString().slice(0, 10);
+}
+
+function getLimaDateOffset(offsetDays) {
+  const now = new Date();
+  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  lima.setDate(lima.getDate() + offsetDays);
+  return lima.toISOString().slice(0, 10);
+}
 const WINDOWS = [
   { label: "Siesta 1", windowMin: 190, color: "#00BCD4" },
   { label: "Siesta 2", windowMin: 220, color: "#43A047" },
@@ -120,9 +131,10 @@ function timeToFrac(timeStr) {
 // ── Main Component ────────────────────────────────────────────
 export default CamilleNapsWrapped;
 function CamilleNaps() {
-  const [view, setView] = useState("nanny"); // "nanny" | "coach"
+  const [view, setView] = useState("nanny");
+  const [viewingDate, setViewingDate] = useState("today"); // "yesterday" | "today"
   // ── Supabase sync ─────────────────────────────────────────────
-  const TODAY = new Date().toISOString().slice(0, 10);
+  const TODAY = getLimaDate();
   const [syncing, setSyncing] = useState(false);
   const [weekData, setWeekData] = useState([]);
 
@@ -144,7 +156,16 @@ function CamilleNaps() {
     try { await sbUpsert(TODAY, wake, napsData, bed); } catch {}
   }
 
-  async function loadWeek() {
+  const [yesterdayData, setYesterdayData] = useState(null);
+
+  useEffect(() => {
+    if (viewingDate === "yesterday") {
+      const yday = getLimaDateOffset(-1);
+      sbGet(yday).then(row => {
+        if (row && !row.error) setYesterdayData(row);
+      }).catch(() => {});
+    }
+  }, [viewingDate]);
     try {
       const rows = await sbGetWeek();
       setWeekData(Array.isArray(rows) ? rows : []);
@@ -439,8 +460,57 @@ function CamilleNaps() {
         {/* ── NANNY VIEW ── */}
         {view === "nanny" && (
           <div>
-            {/* Wake time input */}
-            <Card>
+            {/* Day navigator */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              {[["yesterday", "← Ayer"], ["today", "Hoy"]].map(([val, label]) => (
+                <button key={val} onClick={() => setViewingDate(val)} style={{
+                  flex: 1,
+                  padding: "8px 0",
+                  border: "2px solid",
+                  borderColor: viewingDate === val ? "#7C4DFF" : "#E5E7EB",
+                  borderRadius: 10,
+                  background: viewingDate === val ? "#F5F3FF" : "white",
+                  color: viewingDate === val ? "#7C4DFF" : "#6B7280",
+                  fontWeight: viewingDate === val ? 700 : 400,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}>{label}</button>
+              ))}
+            </div>
+            {/* Yesterday read-only view */}
+            {viewingDate === "yesterday" && (
+              <Card style={{ borderLeft: "4px solid #9CA3AF" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
+                  📋 Resumen de ayer
+                </div>
+                {yesterdayData ? (() => {
+                  const yd = yesterdayData;
+                  const rows = [
+                    { icon: "☀️", label: "Despertar", val: yd.wake_time ? formatTime(yd.wake_time) : "—" },
+                    ...(yd.naps || []).map((n, i) => ({
+                      icon: "💤",
+                      label: `Siesta ${i+1}`,
+                      val: n.didNotHappen ? "No ocurrió" : n.asleepAt && n.wokeAt
+                        ? `${formatTime(n.asleepAt)} → ${formatTime(n.wokeAt)} (${diffMinutes(n.asleepAt, n.wokeAt)} min)`
+                        : "—",
+                    })),
+                    { icon: "🌙", label: "Noche", val: yd.bed_asleep ? formatTime(yd.bed_asleep) : "—" },
+                  ];
+                  return rows.map((r, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < rows.length-1 ? "1px solid #F3F4F6" : "none", fontSize: 13 }}>
+                      <span style={{ color: "#6B7280" }}>{r.icon} {r.label}</span>
+                      <span style={{ fontWeight: 600, color: "#111827" }}>{r.val}</span>
+                    </div>
+                  ));
+                })() : (
+                  <div style={{ color: "#9CA3AF", fontSize: 13 }}>No hay datos de ayer.</div>
+                )}
+              </Card>
+            )}
+
+            {/* Today's cards — only show when viewing today */}
+            {viewingDate === "today" && (<>
               <Label>¿A qué hora despertó Camille?</Label>
               <input
                 type="time"
@@ -650,10 +720,13 @@ function CamilleNaps() {
                 </Card>
               );
             })}
+            </>)}
 
+            {viewingDate === "today" && (
             <div style={{ fontSize: 12, color: "#4B5563", textAlign: "center", marginTop: 8, fontStyle: "italic" }}>
               Rutina de entrada: 30 min antes de la hora objetivo
-            </div>
+            </div>)}
+            {viewingDate === "today" && (
             <button
               onClick={async () => {
                 if (window.confirm("¿Resetear el día? Se borrará todo el progreso de hoy.")) {
@@ -679,6 +752,7 @@ function CamilleNaps() {
             >
               🔄 Resetear día
             </button>
+            )}
           </div>
         )}
 
@@ -819,12 +893,11 @@ function CamilleNaps() {
               {(() => {
                 const days = [];
                 for (let i = 6; i >= 0; i--) {
-                  const d = new Date();
-                  d.setDate(d.getDate() - i);
-                  const dateStr = d.toISOString().slice(0, 10);
-                  const isToday = i === 0;
+                  const dateStr = getLimaDateOffset(-i);
+                  const isToday = dateStr === TODAY;
                   const row = weekData.find(r => r.log_date === dateStr);
-                  days.push({ date: d, row, isToday });
+                  const d = new Date(dateStr + "T12:00:00");
+                  days.push({ date: d, dateStr, row, isToday });
                 }
                 return days.map(({ date, row, isToday }, idx) => {
                   const label = isToday ? "Hoy" : date.toLocaleDateString("es-ES", { weekday: "short", day: "numeric" });
@@ -847,6 +920,9 @@ function CamilleNaps() {
                       opacity: hasData ? 1 : 0.4,
                       fontSize: 12,
                       alignItems: "center",
+                      background: isToday ? "#F5F3FF" : "transparent",
+                      borderRadius: isToday ? 8 : 0,
+                      paddingLeft: isToday ? 8 : 0,
                     }}>
                       <div style={{ fontWeight: isToday ? 700 : 500, color: isToday ? "#7C4DFF" : "#374151" }}>{label}</div>
                       <div style={{ color: "#6B7280" }}>☀️ {wake ? formatTime(wake) : "—"}</div>
