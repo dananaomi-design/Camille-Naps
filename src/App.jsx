@@ -1,6 +1,20 @@
 import { useState, useRef, useEffect } from "react";
 import React from "react";
 
+// ── Timezone fix: siempre usar hora de Lima (UTC-5) ──────────
+function getLimaDate() {
+  const now = new Date();
+  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  return lima.toISOString().slice(0, 10);
+}
+
+function getLimaDateOffset(offsetDays) {
+  const now = new Date();
+  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  lima.setDate(lima.getDate() + offsetDays);
+  return lima.toISOString().slice(0, 10);
+}
+
 // ── Error Boundary ────────────────────────────────────────────
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false }; }
@@ -81,20 +95,6 @@ async function sbGetWeek() {
   return await res.json();
 }
 
-// ── Timezone fix: siempre usar hora de Lima (UTC-5) ──────────
-function getLimaDate() {
-  const now = new Date();
-  // Lima es UTC-5
-  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
-  return lima.toISOString().slice(0, 10);
-}
-
-function getLimaDateOffset(offsetDays) {
-  const now = new Date();
-  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
-  lima.setDate(lima.getDate() + offsetDays);
-  return lima.toISOString().slice(0, 10);
-}
 const WINDOWS = [
   { label: "Siesta 1", windowMin: 190, color: "#00BCD4" },
   { label: "Siesta 2", windowMin: 220, color: "#43A047" },
@@ -166,6 +166,8 @@ function CamilleNaps() {
       }).catch(() => {});
     }
   }, [viewingDate]);
+
+  async function loadWeek() {
     try {
       const rows = await sbGetWeek();
       setWeekData(Array.isArray(rows) ? rows : []);
@@ -511,17 +513,18 @@ function CamilleNaps() {
 
             {/* Today's cards — only show when viewing today */}
             {viewingDate === "today" && (<>
-              <Label>¿A qué hora despertó Camille?</Label>
-              <input
-                type="time"
-                value={wakeTime}
-                onChange={e => setWakeTime(e.target.value)}
-                style={timeInputStyle}
-              />
-              <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
-                Hora de inicio del día
-              </div>
-            </Card>
+              <Card>
+                <Label>¿A qué hora despertó Camille?</Label>
+                <input
+                  type="time"
+                  value={wakeTime}
+                  onChange={e => setWakeTime(e.target.value)}
+                  style={timeInputStyle}
+                />
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>
+                  Hora de inicio del día
+                </div>
+              </Card>
 
             {/* Nap cards */}
             {schedule.map((s, i) => {
