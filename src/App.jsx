@@ -1,18 +1,29 @@
 import { useState, useRef, useEffect } from "react";
 import React from "react";
 
-// ── Timezone fix: siempre usar hora de Lima (UTC-5) ──────────
+// ── Timezone: hora de Lima (UTC-5) ────────────────────────────
 function getLimaDate() {
-  const now = new Date();
-  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  const lima = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  return lima.toISOString().slice(0, 10);
+}
+function getLimaDateOffset(offsetDays) {
+  const lima = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  lima.setDate(lima.getDate() + offsetDays);
   return lima.toISOString().slice(0, 10);
 }
 
-function getLimaDateOffset(offsetDays) {
-  const now = new Date();
-  const lima = new Date(now.getTime() - 5 * 60 * 60 * 1000);
-  lima.setDate(lima.getDate() + offsetDays);
-  return lima.toISOString().slice(0, 10);
+// ── localStorage helpers ──────────────────────────────────────
+function loadDay(dateStr) {
+  try {
+    const raw = localStorage.getItem(`camille-${dateStr}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+function saveDay(dateStr, data) {
+  try {
+    localStorage.setItem(`camille-${dateStr}`, JSON.stringify(data));
+  } catch {}
 }
 
 // ── Error Boundary ────────────────────────────────────────────
@@ -24,215 +35,95 @@ class ErrorBoundary extends React.Component {
       <div style={{ padding: 32, textAlign: "center", fontFamily: "sans-serif" }}>
         <div style={{ fontSize: 48 }}>😴</div>
         <div style={{ fontSize: 18, fontWeight: 700, marginTop: 16, color: "#111827" }}>Algo salió mal</div>
-        <div style={{ fontSize: 14, color: "#6B7280", marginTop: 8 }}>Toca el botón para recargar la app</div>
-        <button
-          onClick={() => window.location.reload()}
-          style={{
-            marginTop: 20, padding: "12px 24px",
-            background: "#7C4DFF", color: "white", border: "none",
-            borderRadius: 12, fontSize: 15, fontWeight: 700,
-            cursor: "pointer", fontFamily: "sans-serif",
-          }}>
-          🔄 Recargar
-        </button>
+        <div style={{ fontSize: 14, color: "#6B7280", marginTop: 8 }}>Toca el botón para recargar</div>
+        <button onClick={() => window.location.reload()} style={{
+          marginTop: 20, padding: "12px 24px", background: "#7C4DFF",
+          color: "white", border: "none", borderRadius: 12, fontSize: 15,
+          fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
+        }}>🔄 Recargar</button>
       </div>
     );
     return this.props.children;
   }
 }
-
-// ── Wrap export with ErrorBoundary ────────────────────────────
 function CamilleNapsWrapped() {
   return <ErrorBoundary><CamilleNaps /></ErrorBoundary>;
 }
 
-// ── Supabase ──────────────────────────────────────────────────
-const SUPABASE_URL = "https://ppxwgapyzbfusfkbjxmo.supabase.co";
-const SUPABASE_KEY = "sb_publishable_Kp9_x2lVHzReRYmWSGd8Sg_VrQdKIhC";
-
-async function sbGet(date) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/nap_logs?log_date=eq.${date}&select=*`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-  });
-  const data = await res.json();
-  return data?.[0] || null;
-}
-
-async function sbUpsert(date, wake, napsData, bed) {
-  await fetch(`${SUPABASE_URL}/rest/v1/nap_logs`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates",
-    },
-    body: JSON.stringify({
-      log_date: date,
-      wake_time: wake,
-      naps: napsData,
-      bed_asleep: bed,
-      updated_at: new Date().toISOString(),
-    }),
-  });
-  // También guardamos en localStorage como caché offline
-  try {
-    localStorage.setItem(`camille-naps-${date}`, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
-  } catch {}
-}
-
-async function sbGetWeek() {
-  const days = [];
-  for (let i = 6; i >= 0; i--) {
-    days.push(getLimaDateOffset(-i));
-  }
-  const from = days[0];
-  const to = days[days.length - 1];
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/nap_logs?log_date=gte.${from}&log_date=lte.${to}&select=*&order=log_date.asc`,
-    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
-  );
-  return await res.json();
-}
-
+// ── Constantes ────────────────────────────────────────────────
 const WINDOWS = [
-  { label: "Siesta 1", windowMin: 180, color: "#00BCD4" },   // 3h00
-  { label: "Siesta 2", windowMin: 210, color: "#43A047" },   // 3h30
-  { label: "Noche",    windowMin: 180, color: "#7C4DFF" },   // 3h00
+  { label: "Siesta 1", windowMin: 180, color: "#00BCD4" },
+  { label: "Siesta 2", windowMin: 210, color: "#43A047" },
+  { label: "Noche",    windowMin: 180, color: "#7C4DFF" },
 ];
 const ROUTINE_MIN = 30;
-
-function addMinutes(timeStr, mins) {
-  const [h, m] = timeStr.split(":").map(Number);
-  const total = h * 60 + m + mins;
-  const nh = Math.floor(total / 60) % 24;
-  const nm = total % 60;
-  return `${String(nh).padStart(2, "0")}:${String(nm).padStart(2, "0")}`;
-}
-
-function diffMinutes(a, b) {
-  const [ah, am] = a.split(":").map(Number);
-  const [bh, bm] = b.split(":").map(Number);
-  return (bh * 60 + bm) - (ah * 60 + am);
-}
-
-function formatTime(t) {
-  const [h, m] = t.split(":").map(Number);
-  const suffix = h >= 12 ? "pm" : "am";
-  const hh = h % 12 || 12;
-  return `${hh}:${String(m).padStart(2, "0")} ${suffix}`;
-}
-
-function timeToFrac(timeStr) {
-  const [h, m] = timeStr.split(":").map(Number);
-  return (h * 60 + m) / (24 * 60);
-}
-
-// ── Constantes del día (fuera del componente para ser estables) ──
 const TODAY = getLimaDate();
 const EMPTY_NAPS = [
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
 ];
+const DEFAULT_DAY = { wakeTime: "07:00", naps: EMPTY_NAPS, bedAsleep: null };
+
+// ── Helper functions ──────────────────────────────────────────
+function addMinutes(timeStr, mins) {
+  const [h, m] = timeStr.split(":").map(Number);
+  const total = h * 60 + m + mins;
+  return `${String(Math.floor(total/60)%24).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`;
+}
+function diffMinutes(a, b) {
+  const [ah, am] = a.split(":").map(Number);
+  const [bh, bm] = b.split(":").map(Number);
+  return (bh * 60 + bm) - (ah * 60 + am);
+}
+function formatTime(t) {
+  const [h, m] = t.split(":").map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "pm" : "am"}`;
+}
+function timeToFrac(timeStr) {
+  const [h, m] = timeStr.split(":").map(Number);
+  return (h * 60 + m) / (24 * 60);
+}
+function timeToMin(t) {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
 
 // ── Main Component ────────────────────────────────────────────
 export default CamilleNapsWrapped;
 function CamilleNaps() {
   const [view, setView] = useState("nanny");
-  const [viewingDate, setViewingDate] = useState("today"); // "yesterday" | "today"
-  // ── Supabase sync ─────────────────────────────────────────────
-  const [syncing, setSyncing] = useState(false);
-  const [weekData, setWeekData] = useState([]);
-
-  // Carga inicial desde Supabase (con fallback a localStorage)
-  function loadLocalFallback() {
-    try {
-      const raw = localStorage.getItem(`camille-naps-${TODAY}`);
-      if (raw) return JSON.parse(raw);
-    } catch {}
-    return null;
-  }
-
-  async function saveTodayData(wake, napsData, bed) {
-    // Guarda local inmediatamente para no perder datos
-    try {
-      localStorage.setItem(`camille-naps-${TODAY}`, JSON.stringify({ wakeTime: wake, naps: napsData, bedAsleep: bed }));
-    } catch {}
-    // Sincroniza con Supabase en background
-    try { await sbUpsert(TODAY, wake, napsData, bed); } catch {}
-  }
-
-  const [yesterdayData, setYesterdayData] = useState(null);
-
-  useEffect(() => {
-    if (viewingDate === "yesterday") {
-      const yday = getLimaDateOffset(-1);
-      sbGet(yday).then(row => {
-        if (row && !row.error) setYesterdayData(row);
-      }).catch(() => {});
-    }
-  }, [viewingDate]);
-
-  async function loadWeek() {
-    try {
-      const rows = await sbGetWeek();
-      setWeekData(Array.isArray(rows) ? rows : []);
-    } catch {}
-  }
-
-  const localFallback = loadLocalFallback();
-  const [wakeTime, setWakeTimeRaw] = useState(localFallback?.wakeTime || "07:00");
-  const [naps, setNapsRaw] = useState(localFallback?.naps || EMPTY_NAPS);
-  const [bedAsleep, setBedAsleepRaw] = useState(localFallback?.bedAsleep || null);
+  const [viewingDate, setViewingDate] = useState("today");
   const chartRef = useRef(null);
 
-  // Refs para siempre tener los valores actuales en los closures
-  const wakeTimeRef = useRef(wakeTime);
-  const napsRef = useRef(naps);
-  const bedAsleepRef = useRef(bedAsleep);
-  useEffect(() => { wakeTimeRef.current = wakeTime; }, [wakeTime]);
-  useEffect(() => { napsRef.current = naps; }, [naps]);
-  useEffect(() => { bedAsleepRef.current = bedAsleep; }, [bedAsleep]);
+  // ── Estado único del día ──────────────────────────────────────
+  const [dayData, setDayData] = useState(
+    () => loadDay(TODAY) || DEFAULT_DAY
+  );
+  const wakeTime  = dayData.wakeTime;
+  const naps      = dayData.naps;
+  const bedAsleep = dayData.bedAsleep;
 
-  // Al montar: carga desde Supabase y sobreescribe si hay datos más recientes
+  // Guardar en localStorage cada vez que cambia
+  useEffect(() => { saveDay(TODAY, dayData); }, [dayData]);
+
+  // Setters
+  function setWakeTime(val) { setDayData(p => ({ ...p, wakeTime: val })); }
+  function setNaps(u) { setDayData(p => ({ ...p, naps: typeof u === "function" ? u(p.naps) : u })); }
+  function setBedAsleep(val) { setDayData(p => ({ ...p, bedAsleep: val })); }
+
+  // ── Ayer ──────────────────────────────────────────────────────
+  const [yesterdayData, setYesterdayData] = useState(null);
   useEffect(() => {
-    setSyncing(true);
-    sbGet(TODAY).then(row => {
-      try {
-        if (row && !row.error) {
-          const wake = row.wake_time || "07:00";
-          const napsData = (row.naps && Array.isArray(row.naps)) ? row.naps : EMPTY_NAPS;
-          const bed = row.bed_asleep || null;
-          setWakeTimeRaw(wake);
-          setNapsRaw(napsData);
-          setBedAsleepRaw(bed);
-          // Actualizar refs inmediatamente para que los wrappers tengan datos frescos
-          wakeTimeRef.current = wake;
-          napsRef.current = napsData;
-          bedAsleepRef.current = bed;
-        }
-      } catch {}
-      setSyncing(false);
-    }).catch(() => setSyncing(false));
-    loadWeek();
-  }, []);
+    if (viewingDate === "yesterday")
+      setYesterdayData(loadDay(getLimaDateOffset(-1)));
+  }, [viewingDate]);
 
-  // Wrappers que guardan al mismo tiempo usando refs para evitar stale closures
-  function setWakeTime(val) {
-    setWakeTimeRaw(val);
-    saveTodayData(val, napsRef.current, bedAsleepRef.current);
-  }
-  function setNaps(updater) {
-    setNapsRaw(prev => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      saveTodayData(wakeTimeRef.current, next, bedAsleepRef.current);
-      return next;
-    });
-  }
-  function setBedAsleep(val) {
-    setBedAsleepRaw(val);
-    saveTodayData(wakeTimeRef.current, napsRef.current, val);
-  }
+  // ── Historial semanal (directo de localStorage) ───────────────
+  const weekData = Array.from({ length: 7 }, (_, i) => {
+    const dateStr = getLimaDateOffset(-(6 - i));
+    const d = loadDay(dateStr);
+    return { log_date: dateStr, wake_time: d?.wakeTime, naps: d?.naps, bed_asleep: d?.bedAsleep };
+  });
 
   // ── Helpers de tiempo ────────────────────────────────────────
   function timeToMin(t) {
@@ -439,7 +330,7 @@ function CamilleNaps() {
                 Camille
               </div>
               <div style={{ fontSize: 12, color: "#6B7280", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                14 meses · Rastreador de sueño {syncing ? "· ⏳ sincronizando..." : "· ☁️ sincronizado"}
+                14 meses · Rastreador de sueño
               </div>
             </div>
           </div>
@@ -741,11 +632,8 @@ function CamilleNaps() {
             <button
               onClick={async () => {
                 if (window.confirm("¿Resetear el día? Se borrará todo el progreso de hoy.")) {
-                  try { localStorage.removeItem(`camille-naps-${TODAY}`); } catch {}
-                  setWakeTimeRaw("07:00");
-                  setNapsRaw(EMPTY_NAPS);
-                  setBedAsleepRaw(null);
-                  await sbUpsert(TODAY, "07:00", EMPTY_NAPS, null);
+                  try { localStorage.removeItem(`camille-${TODAY}`); } catch {}
+                  setDayData(DEFAULT_DAY);
                 }
               }}
               style={{
