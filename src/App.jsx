@@ -96,9 +96,9 @@ async function sbGetWeek() {
 }
 
 const WINDOWS = [
-  { label: "Siesta 1", windowMin: 190, color: "#00BCD4" },
-  { label: "Siesta 2", windowMin: 220, color: "#43A047" },
-  { label: "Noche",    windowMin: 180, color: "#7C4DFF" },
+  { label: "Siesta 1", windowMin: 180, color: "#00BCD4" },   // 3h00
+  { label: "Siesta 2", windowMin: 210, color: "#43A047" },   // 3h30
+  { label: "Noche",    windowMin: 180, color: "#7C4DFF" },   // 3h00
 ];
 const ROUTINE_MIN = 30;
 
@@ -128,13 +128,19 @@ function timeToFrac(timeStr) {
   return (h * 60 + m) / (24 * 60);
 }
 
+// ── Constantes del día (fuera del componente para ser estables) ──
+const TODAY = getLimaDate();
+const EMPTY_NAPS = [
+  { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
+  { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
+];
+
 // ── Main Component ────────────────────────────────────────────
 export default CamilleNapsWrapped;
 function CamilleNaps() {
   const [view, setView] = useState("nanny");
   const [viewingDate, setViewingDate] = useState("today"); // "yesterday" | "today"
   // ── Supabase sync ─────────────────────────────────────────────
-  const TODAY = getLimaDate();
   const [syncing, setSyncing] = useState(false);
   const [weekData, setWeekData] = useState([]);
 
@@ -174,11 +180,6 @@ function CamilleNaps() {
     } catch {}
   }
 
-  const EMPTY_NAPS = [
-    { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
-    { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
-  ];
-
   const localFallback = loadLocalFallback();
   const [wakeTime, setWakeTimeRaw] = useState(localFallback?.wakeTime || "07:00");
   const [naps, setNapsRaw] = useState(localFallback?.naps || EMPTY_NAPS);
@@ -199,9 +200,16 @@ function CamilleNaps() {
     sbGet(TODAY).then(row => {
       try {
         if (row && !row.error) {
-          if (row.wake_time) setWakeTimeRaw(row.wake_time);
-          if (row.naps && Array.isArray(row.naps)) setNapsRaw(row.naps);
-          if (row.bed_asleep) setBedAsleepRaw(row.bed_asleep);
+          const wake = row.wake_time || "07:00";
+          const napsData = (row.naps && Array.isArray(row.naps)) ? row.naps : EMPTY_NAPS;
+          const bed = row.bed_asleep || null;
+          setWakeTimeRaw(wake);
+          setNapsRaw(napsData);
+          setBedAsleepRaw(bed);
+          // Actualizar refs inmediatamente para que los wrappers tengan datos frescos
+          wakeTimeRef.current = wake;
+          napsRef.current = napsData;
+          bedAsleepRef.current = bed;
         }
       } catch {}
       setSyncing(false);
@@ -342,7 +350,7 @@ function CamilleNaps() {
       const n = [...prev];
       const asleep = n[i].asleepAt;
       const dur = asleep ? diffMinutes(asleep, time) : 0;
-      n[i] = { ...n[i], wokeAt: time, long: dur >= 60 };
+      n[i] = { ...n[i], wokeAt: time, long: dur >= 90 };
       return n;
     });
   }
@@ -681,7 +689,7 @@ function CamilleNaps() {
                             }}>
                               {nap.long
                                 ? `✅ Siesta larga (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ventanas normales`
-                                : `⚠️ Siesta corta (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Ajustando ventana siguiente`}
+                                : `⚠️ Siesta corta (${diffMinutes(nap.asleepAt, nap.wokeAt)} min) · Menos de 1h30`}
                             </div>
                           )}
 
@@ -839,7 +847,7 @@ function CamilleNaps() {
                     </div>
                     <div style={{
                       fontWeight: 600,
-                      color: dur === null ? "#D1D5DB" : dur >= 60 ? "#059669" : "#D97706",
+                      color: dur === null ? "#D1D5DB" : dur >= 90 ? "#059669" : "#D97706",
                     }}>
                       {dur !== null ? `${dur} min` : "—"}
                     </div>
@@ -1148,7 +1156,7 @@ function buildExportText(schedule, naps, wakeTime, bedAsleep) {
       if (nap.timeToFallAsleep) text += `  · Tiempo en dormirla: ${nap.timeToFallAsleep} min\n`;
       if (nap.asleepAt && nap.wokeAt) {
         const dur = diffMinutes(nap.asleepAt, nap.wokeAt);
-        text += `  · Duración: ${dur} min (${dur >= 60 ? "✅ larga" : "⚠️ corta"})\n`;
+        text += `  · Duración: ${dur} min (${dur >= 90 ? "✅ larga" : "⚠️ corta"})\n`;
       }
     }
     text += "\n";
