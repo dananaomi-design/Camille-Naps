@@ -62,7 +62,7 @@ const EMPTY_NAPS = [
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
 ];
-const DEFAULT_DAY = { wakeTime: "07:00", naps: EMPTY_NAPS, bedAsleep: null };
+const DEFAULT_DAY = { wakeTime: "06:00", naps: EMPTY_NAPS, bedAsleep: null };
 
 // ── Helper functions ──────────────────────────────────────────
 function addMinutes(timeStr, mins) {
@@ -131,10 +131,11 @@ function CamilleNaps() {
     return h * 60 + m;
   }
 
-  // Si la Siesta 2 empujaría la noche a más de las 20:00, se omite
-  // y la noche se adelanta al máximo temprano posible (17:30 = 5:30pm)
-  const BEDTIME_CUTOFF_MIN = 20 * 60; // 8:00 pm
-  const EARLIEST_BED_MIN   = 17 * 60 + 30; // 5:30 pm
+  // Hora mínima noche con Siesta 2: 6:30pm
+  // Hora mínima noche sin Siesta 2: 5:30pm
+  const BEDTIME_CUTOFF_MIN   = 20 * 60;       // 8:00 pm — si se pasa, cancelar siesta 2
+  const EARLIEST_BED_NORMAL  = 18 * 60 + 30;  // 6:30 pm — mínimo con siestas normales
+  const EARLIEST_BED_SKIP    = 17 * 60 + 30;  // 5:30 pm — mínimo si se cancela siesta 2
 
   // Compute schedule from wake time + actual nap data
   function getSchedule() {
@@ -201,16 +202,20 @@ function CamilleNaps() {
     }
 
     // ── Noche ─────────────────────────────────────────────────
-    // Ventana normal desde el último despertar
     let sleepTarget2 = addMinutes(currentWake, win2.windowMin);
 
-    // Si se saltó Siesta 2: noche = max(último despertar + 4h, 5:30pm)
-    if (skipNap2) {
-      const fromWake = addMinutes(currentWake, 4 * 60); // despertar + 4h (ventana máxima)
-      const fromWakeMin = timeToMin(fromWake);
-      const finalMin = Math.max(fromWakeMin, EARLIEST_BED_MIN);
+    if (skipNap2 || nap2DNH) {
+      // Sin Siesta 2: mínimo 5:30pm, máximo ventana de 4h
+      const fromWake = addMinutes(currentWake, 4 * 60);
+      const finalMin = Math.max(timeToMin(fromWake), EARLIEST_BED_SKIP);
       const hh = Math.floor(finalMin / 60);
       const mm = finalMin % 60;
+      sleepTarget2 = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+    } else {
+      // Con siestas normales: nunca antes de las 6:30pm
+      const normalMin = Math.max(timeToMin(sleepTarget2), EARLIEST_BED_NORMAL);
+      const hh = Math.floor(normalMin / 60);
+      const mm = normalMin % 60;
       sleepTarget2 = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
     }
     const enterRoom2   = addMinutes(sleepTarget2, -ROUTINE_MIN);
@@ -535,19 +540,22 @@ function CamilleNaps() {
                             </div>
                           </div>
 
-                          {/* Time to fall asleep */}
-                          <div style={{ marginTop: 8, minWidth: 0 }}>
-                            <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Tiempo en dormirla (min)</div>
-                            <input
-                              type="number"
-                              min="0"
-                              max="120"
-                              placeholder="ej. 15"
-                              value={nap.timeToFallAsleep || ""}
-                              onChange={e => recordTimeToFallAsleep(i, e.target.value)}
-                              style={{ ...timeInputStyle, fontSize: 16 }}
-                            />
-                          </div>
+                          {/* Tiempo en dormirla — automático */}
+                          {nap.asleepAt && s.enterRoom && (
+                            <div style={{
+                              marginTop: 8,
+                              padding: "8px 12px",
+                              borderRadius: 10,
+                              background: "#F0F9FF",
+                              border: "1px solid #BAE6FD",
+                              fontSize: 13,
+                            }}>
+                              <span style={{ color: "#6B7280" }}>⏱ Tiempo en dormirla: </span>
+                              <span style={{ fontWeight: 700, color: "#0369A1" }}>
+                                {Math.max(0, diffMinutes(s.enterRoom, nap.asleepAt))} min
+                              </span>
+                            </div>
+                          )}
 
                           {/* Clear fields button */}
                           {(nap.asleepAt || nap.wokeAt) && (
@@ -1041,7 +1049,10 @@ function buildExportText(schedule, naps, wakeTime, bedAsleep) {
       text += `  · Objetivo: ${formatTime(s.sleepTarget)}\n`;
       text += `  · Se durmió: ${nap.asleepAt ? formatTime(nap.asleepAt) : "—"}\n`;
       text += `  · Despertó: ${nap.wokeAt ? formatTime(nap.wokeAt) : "—"}\n`;
-      if (nap.timeToFallAsleep) text += `  · Tiempo en dormirla: ${nap.timeToFallAsleep} min\n`;
+      if (nap.asleepAt && s.enterRoom) {
+        const ttf = Math.max(0, diffMinutes(s.enterRoom, nap.asleepAt));
+        text += `  · Tiempo en dormirla: ${ttf} min\n`;
+      }
       if (nap.asleepAt && nap.wokeAt) {
         const dur = diffMinutes(nap.asleepAt, nap.wokeAt);
         text += `  · Duración: ${dur} min (${dur >= 90 ? "✅ larga" : "⚠️ corta"})\n`;
