@@ -62,6 +62,7 @@ const EMPTY_NAPS = [
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
 ];
+const EMPTY_NIGHT = { wakings: [] };
 const DEFAULT_DAY = { wakeTime: "06:00", naps: EMPTY_NAPS, bedAsleep: null, night: EMPTY_NIGHT };
 
 // ── Helper functions ──────────────────────────────────────────
