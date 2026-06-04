@@ -11,6 +11,17 @@ function getLimaDateOffset(offsetDays) {
   lima.setDate(lima.getDate() + offsetDays);
   return lima.toISOString().slice(0, 10);
 }
+// La "noche" pertenece al día que empezó (7pm → 6am)
+// Si son las 12am-6am Lima, los despertares son de la noche anterior
+function getNightDate() {
+  const lima = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  const hour = lima.getHours();
+  // Entre medianoche y las 6am → la noche pertenece al día anterior
+  if (hour < 6) {
+    lima.setDate(lima.getDate() - 1);
+  }
+  return lima.toISOString().slice(0, 10);
+}
 
 // ── localStorage helpers ──────────────────────────────────────
 function loadDay(dateStr) {
@@ -58,12 +69,13 @@ const WINDOWS = [
 ];
 const ROUTINE_MIN = 30;
 const TODAY = getLimaDate();
+const NIGHT_DATE = getNightDate();
 const EMPTY_NAPS = [
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
   { asleepAt: null, wokeAt: null, long: null, didNotHappen: false, timeToFallAsleep: null },
 ];
 const EMPTY_NIGHT = { wakings: [] };
-const DEFAULT_DAY = { wakeTime: "06:00", naps: EMPTY_NAPS, bedAsleep: null, night: EMPTY_NIGHT };
+const DEFAULT_DAY = { wakeTime: "06:00", naps: EMPTY_NAPS, bedAsleep: null };
 
 // ── Helper functions ──────────────────────────────────────────
 function addMinutes(timeStr, mins) {
@@ -110,8 +122,14 @@ function CamilleNaps() {
   // Setters
   function setWakeTime(val) { setDayData(p => ({ ...p, wakeTime: val })); }
   function setNaps(u) { setDayData(p => ({ ...p, naps: typeof u === "function" ? u(p.naps) : u })); }
-  function setBedAsleep(val) { setDayData(p => ({ ...p, bedAsleep: val })); }
-  function setNight(val) { setDayData(p => ({ ...p, night: val })); }
+  // ── Estado de noche (fecha de noche, no del día) ──────────────
+  const [nightData, setNightDataRaw] = useState(
+    () => loadDay(`night-${NIGHT_DATE}`) || EMPTY_NIGHT
+  );
+  useEffect(() => {
+    saveDay(`night-${NIGHT_DATE}`, nightData);
+  }, [nightData]);
+  function setNight(val) { setNightDataRaw(val); }
 
   // ── Ayer ──────────────────────────────────────────────────────
   const [yesterdayData, setYesterdayData] = useState(null);
@@ -124,7 +142,8 @@ function CamilleNaps() {
   const weekData = Array.from({ length: 7 }, (_, i) => {
     const dateStr = getLimaDateOffset(-(6 - i));
     const d = loadDay(dateStr);
-    return { log_date: dateStr, wake_time: d?.wakeTime, naps: d?.naps, bed_asleep: d?.bedAsleep, night: d?.night };
+    const n = loadDay(`night-${dateStr}`);
+    return { log_date: dateStr, wake_time: d?.wakeTime, naps: d?.naps, bed_asleep: d?.bedAsleep, night: n };
   });
 
   // ── Helpers de tiempo ────────────────────────────────────────
@@ -673,11 +692,12 @@ function CamilleNaps() {
                 🦉 Despertares nocturnos
               </div>
               <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 16 }}>
-                {new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
+                Noche del {new Date(NIGHT_DATE + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
+                {NIGHT_DATE !== TODAY && <span style={{ color: "#7C4DFF", fontWeight: 600 }}> (noche anterior)</span>}
               </div>
 
               {/* Wakings list */}
-              {(dayData.night?.wakings || []).map((w, i) => (
+              {(nightData.wakings || []).map((w, i) => (
                 <div key={i} style={{
                   display: "grid", gridTemplateColumns: "1fr 1fr 32px",
                   gap: 8, marginBottom: 10, alignItems: "end",
@@ -685,7 +705,7 @@ function CamilleNaps() {
                   <div>
                     <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se despertó</div>
                     <input type="time" value={w.time || ""} onChange={e => {
-                      const w2 = [...(dayData.night?.wakings || [])];
+                      const w2 = [...(nightData.wakings || [])];
                       w2[i] = { ...w2[i], time: e.target.value };
                       setNight({ wakings: w2 });
                     }} style={timeInputStyle} />
@@ -695,14 +715,14 @@ function CamilleNaps() {
                     <input type="number" min="0" max="120" placeholder="ej. 20"
                       value={w.fellBackAsleepMins || ""}
                       onChange={e => {
-                        const w2 = [...(dayData.night?.wakings || [])];
+                        const w2 = [...(nightData.wakings || [])];
                         w2[i] = { ...w2[i], fellBackAsleepMins: e.target.value ? parseInt(e.target.value) : null };
                         setNight({ wakings: w2 });
                       }}
                       style={{ ...timeInputStyle, fontSize: 16 }} />
                   </div>
                   <button onClick={() => {
-                    const w2 = (dayData.night?.wakings || []).filter((_, j) => j !== i);
+                    const w2 = (nightData.wakings || []).filter((_, j) => j !== i);
                     setNight({ wakings: w2 });
                   }} style={{
                     width: 32, height: 42, border: "1.5px solid #FCA5A5",
@@ -715,7 +735,7 @@ function CamilleNaps() {
 
               {/* Add waking button */}
               <button onClick={() => {
-                const w2 = [...(dayData.night?.wakings || []), { time: "", fellBackAsleepMins: null }];
+                const w2 = [...(nightData.wakings || []), { time: "", fellBackAsleepMins: null }];
                 setNight({ wakings: w2 });
               }} style={{
                 width: "100%", padding: "12px", marginTop: 4,
@@ -728,19 +748,19 @@ function CamilleNaps() {
             </Card>
 
             {/* Summary */}
-            {(dayData.night?.wakings || []).length > 0 && (
+            {(nightData.wakings || []).length > 0 && (
               <Card>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div style={{ background: "#F5F3FF", borderRadius: 12, padding: "12px", textAlign: "center" }}>
                     <div style={{ fontSize: 24, fontWeight: 800, color: "#7C4DFF" }}>
-                      {(dayData.night?.wakings || []).length}
+                      {(nightData.wakings || []).length}
                     </div>
                     <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>despertares</div>
                   </div>
                   <div style={{ background: "#F0FDF4", borderRadius: 12, padding: "12px", textAlign: "center" }}>
                     <div style={{ fontSize: 24, fontWeight: 800, color: "#059669" }}>
                       {(() => {
-                        const mins = (dayData.night?.wakings || []).filter(w => w.fellBackAsleepMins).map(w => w.fellBackAsleepMins);
+                        const mins = (nightData.wakings || []).filter(w => w.fellBackAsleepMins).map(w => w.fellBackAsleepMins);
                         if (!mins.length) return "—";
                         return `${Math.round(mins.reduce((a,b) => a+b, 0) / mins.length)} min`;
                       })()}
@@ -887,8 +907,8 @@ function CamilleNaps() {
               <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 8 }}>
                 📆 Historial de la semana
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 1fr 40px 40px", gap: 4, fontSize: 10, color: "#9CA3AF", marginBottom: 8 }}>
-                <div></div><div>Despertar</div><div>Noche</div><div style={{textAlign:"center"}}>Conc.</div><div style={{textAlign:"center"}}>Desp.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 50px 40px 36px", gap: 4, fontSize: 10, color: "#9CA3AF", marginBottom: 8 }}>
+                <div></div><div>Despertar</div><div style={{textAlign:"center"}}>Siestas</div><div style={{textAlign:"center"}}>Conc.</div><div style={{textAlign:"center"}}>🌙</div>
               </div>
               {(() => {
                 const days = [];
@@ -902,28 +922,44 @@ function CamilleNaps() {
                 return days.map(({ date, row, isToday }, idx) => {
                   const label = isToday ? "Hoy" : date.toLocaleDateString("es-ES", { weekday: "short", day: "numeric" });
                   const wake = row?.wake_time;
-                  const bed = row?.bed_asleep;
                   const napData = row?.naps || [];
+
+                  // Total siestas
                   let totalNapMins = 0;
                   napData.forEach(n => {
                     if (n.asleepAt && n.wokeAt && !n.didNotHappen)
                       totalNapMins += diffMinutes(n.asleepAt, n.wokeAt);
                   });
-                  const hasData = !!wake;
-                  // Conciliación promedio: promedio de min para dormirse en siestas
-                  const concMins = (row?.naps || [])
-                    .filter(n => n.asleepAt && !n.didNotHappen)
-                    .map((n, ni) => {
-                      const sched = schedule[ni];
-                      return sched?.enterRoom ? Math.max(0, diffMinutes(sched.enterRoom, n.asleepAt)) : null;
-                    }).filter(Boolean);
-                  const avgConc = concMins.length ? Math.round(concMins.reduce((a,b)=>a+b,0)/concMins.length) : null;
+                  const totalNapStr = totalNapMins > 0
+                    ? `${Math.floor(totalNapMins/60)}h${String(totalNapMins%60).padStart(2,"0")}`
+                    : "—";
+
+                  // Conciliación: calculada desde los datos del día histórico
+                  // enterRoom = sleepTarget - ROUTINE_MIN, sleepTarget = wakeFromPrev + window
+                  const concMins = [];
+                  let prevWake = wake || "06:00";
+                  napData.forEach((n, ni) => {
+                    if (n.didNotHappen || !n.asleepAt) return;
+                    const win = WINDOWS[ni];
+                    if (!win) return;
+                    const sleepTarget = addMinutes(prevWake, win.windowMin);
+                    const enterRoom = addMinutes(sleepTarget, -ROUTINE_MIN);
+                    const mins = Math.max(0, diffMinutes(enterRoom, n.asleepAt));
+                    concMins.push(mins);
+                    prevWake = n.wokeAt || addMinutes(n.asleepAt, 75);
+                  });
+                  const avgConc = concMins.length
+                    ? Math.round(concMins.reduce((a,b)=>a+b,0)/concMins.length)
+                    : null;
+
                   // Despertares nocturnos
                   const wakings = (row?.night?.wakings || []).length;
+                  const hasData = !!wake;
+
                   return (
                     <div key={idx} style={{
                       display: "grid",
-                      gridTemplateColumns: "52px 1fr 1fr 40px 40px",
+                      gridTemplateColumns: "52px 1fr 50px 40px 36px",
                       gap: 4,
                       padding: "8px 0",
                       borderBottom: idx < 6 ? "1px solid #F3F4F6" : "none",
@@ -936,8 +972,10 @@ function CamilleNaps() {
                     }}>
                       <div style={{ fontWeight: isToday ? 700 : 500, color: isToday ? "#7C4DFF" : "#374151" }}>{label}</div>
                       <div style={{ color: "#6B7280" }}>☀️ {wake ? formatTime(wake) : "—"}</div>
-                      <div style={{ color: "#6B7280" }}>🌙 {bed ? formatTime(bed) : "—"}</div>
-                      <div style={{ color: "#059669", fontWeight: 600, textAlign: "center" }} title="Promedio conciliación">
+                      <div style={{ color: "#00BCD4", fontWeight: 600, textAlign: "center" }}>
+                        {totalNapStr}
+                      </div>
+                      <div style={{ color: "#059669", fontWeight: 600, textAlign: "center" }} title="Promedio conciliación siestas">
                         {avgConc !== null ? `${avgConc}m` : "—"}
                       </div>
                       <div style={{ color: "#7C4DFF", fontWeight: 600, textAlign: "center" }} title="Despertares noche">
