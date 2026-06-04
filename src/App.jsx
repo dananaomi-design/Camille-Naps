@@ -122,13 +122,20 @@ function CamilleNaps() {
   // Setters
   function setWakeTime(val) { setDayData(p => ({ ...p, wakeTime: val })); }
   function setNaps(u) { setDayData(p => ({ ...p, naps: typeof u === "function" ? u(p.naps) : u })); }
-  // ── Estado de noche (fecha de noche, no del día) ──────────────
+  // ── Estado de noche con selector de fecha ────────────────────
+  const [selectedNightDate, setSelectedNightDate] = useState(NIGHT_DATE);
   const [nightData, setNightDataRaw] = useState(
     () => loadDay(`night-${NIGHT_DATE}`) || EMPTY_NIGHT
   );
   useEffect(() => {
-    saveDay(`night-${NIGHT_DATE}`, nightData);
+    saveDay(`night-${selectedNightDate}`, nightData);
   }, [nightData]);
+
+  // Cuando cambia la fecha seleccionada, carga esa noche
+  useEffect(() => {
+    setNightDataRaw(loadDay(`night-${selectedNightDate}`) || EMPTY_NIGHT);
+  }, [selectedNightDate]);
+
   function setNight(val) { setNightDataRaw(val); }
 
   // ── Ayer ──────────────────────────────────────────────────────
@@ -688,12 +695,42 @@ function CamilleNaps() {
         {view === "lechucera" && (
           <div>
             <Card>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#111827", marginBottom: 4 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
                 🦉 Despertares nocturnos
               </div>
-              <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 16 }}>
-                Noche del {new Date(NIGHT_DATE + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
-                {NIGHT_DATE !== TODAY && <span style={{ color: "#7C4DFF", fontWeight: 600 }}> (noche anterior)</span>}
+
+              {/* Night date selector — last 3 nights */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+                {[0, 1, 2].map(offset => {
+                  const d = getLimaDateOffset(-offset);
+                  // For display: offset 0 = "Anoche", 1 = "Hace 2 noches", etc
+                  // But use actual night date logic
+                  const nightD = (() => {
+                    const lima = new Date(Date.now() - 5 * 60 * 60 * 1000);
+                    const hour = lima.getHours();
+                    const base = new Date(lima);
+                    if (hour < 6) base.setDate(base.getDate() - 1);
+                    base.setDate(base.getDate() - offset);
+                    return base.toISOString().slice(0, 10);
+                  })();
+                  const labels = ["Esta noche", "Anoche", "Hace 2 noches"];
+                  const isSelected = selectedNightDate === nightD;
+                  return (
+                    <button key={offset} onClick={() => setSelectedNightDate(nightD)} style={{
+                      flex: 1,
+                      padding: "8px 4px",
+                      border: "2px solid",
+                      borderColor: isSelected ? "#7C4DFF" : "#E5E7EB",
+                      borderRadius: 10,
+                      background: isSelected ? "#F5F3FF" : "white",
+                      color: isSelected ? "#7C4DFF" : "#6B7280",
+                      fontWeight: isSelected ? 700 : 400,
+                      fontSize: 11,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}>{labels[offset]}</button>
+                  );
+                })}
               </div>
 
               {/* Wakings list */}
