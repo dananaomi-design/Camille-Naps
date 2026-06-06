@@ -1155,11 +1155,64 @@ function CamilleNaps() {
                   background: "white", color: "#7C4DFF",
                   border: "2px solid #7C4DFF", borderRadius: 16,
                   fontSize: 15, fontWeight: 700, cursor: "pointer",
-                  fontFamily: "inherit", marginTop: 8, marginBottom: 16,
+                  fontFamily: "inherit", marginTop: 8, marginBottom: 8,
                 }}
               >
                 📥 Descargar historial completo (CSV)
               </button>
+
+              {/* CSV import */}
+              <label style={{
+                display: "block", width: "100%", padding: "14px",
+                background: "white", color: "#059669",
+                border: "2px solid #059669", borderRadius: 16,
+                fontSize: 15, fontWeight: 700, cursor: "pointer",
+                fontFamily: "inherit", marginBottom: 16,
+                textAlign: "center", boxSizing: "border-box",
+              }}>
+                📂 Importar CSV
+                <input type="file" accept=".csv" style={{ display: "none" }} onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => {
+                    try {
+                      const lines = ev.target.result.split("\n").filter(l => l.trim());
+                      // Skip header row
+                      const dataRows = lines.slice(1);
+                      let imported = 0;
+                      let skipped = 0;
+                      dataRows.forEach(line => {
+                        const cols = line.split(",");
+                        // Columns: Fecha(0), Despertar(1), S1inicio(2), S1fin(3), S1dur(4), S1conc(5), S2inicio(6), S2fin(7), S2dur(8), S2conc(9), HoraDormir(10), Despertares(11), ConcNoche(12)
+                        const date = cols[0]?.trim();
+                        const wakeTime = cols[1]?.trim();
+                        if (!date || !wakeTime || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; return; }
+                        // Build naps
+                        const naps = [0, 1].map(i => {
+                          const offset = 2 + i * 4;
+                          const asleepAt = cols[offset]?.trim() || null;
+                          const wokeAt = cols[offset+1]?.trim() || null;
+                          const dur = parseInt(cols[offset+2]?.trim());
+                          const concOrStatus = cols[offset+3]?.trim();
+                          const didNotHappen = concOrStatus === "no ocurrió";
+                          const long = dur >= 70;
+                          return { asleepAt: asleepAt||null, wokeAt: wokeAt||null, long: isNaN(dur) ? null : long, didNotHappen, timeToFallAsleep: null };
+                        });
+                        const bedAsleep = cols[10]?.trim() || null;
+                        saveDay(date, { wakeTime, naps, bedAsleep });
+                        imported++;
+                      });
+                      e.target.value = "";
+                      alert(`✅ Importado: ${imported} días\n${skipped > 0 ? `⚠️ Omitidos: ${skipped} filas inválidas` : ""}`);
+                      window.location.reload();
+                    } catch(err) {
+                      alert("❌ Error al leer el archivo. Asegúrate de que sea el CSV exportado por esta app.");
+                    }
+                  };
+                  reader.readAsText(file);
+                }} />
+              </label>
             </div>
           );
         })()}
