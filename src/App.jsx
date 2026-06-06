@@ -208,7 +208,7 @@ function CamilleNaps() {
     const estWake1        = addMinutes(sleepTarget1, 75);
     const win2            = WINDOWS[2];
     const projectedBedMin = timeToMin(addMinutes(estWake1, win2.windowMin));
-    const skipNap2        = !nap1DNH && projectedBedMin > BEDTIME_CUTOFF_MIN;
+    const warnNap2        = !nap1DNH && projectedBedMin > BEDTIME_CUTOFF_MIN;
 
     const actual1 = naps[1]?.asleepAt;
     const woke1   = naps[1]?.wokeAt;
@@ -219,11 +219,11 @@ function CamilleNaps() {
       enterRoom: enterRoom1, sleepTarget: sleepTarget1,
       actual: actual1, woke: woke1, long: naps[1]?.long,
       currentWake: nap1DNH ? wakeTime : currentWake,
-      skip: skipNap2, didNotHappen: nap2DNH,
+      skip: false, warn: warnNap2, didNotHappen: nap2DNH,
       projectedBed: addMinutes(estWake1, win2.windowMin),
     });
 
-    if (!skipNap2 && !nap2DNH) {
+    if (!warnNap2 && !nap2DNH) {
       if (woke1)        currentWake = woke1;
       else if (actual1) currentWake = addMinutes(actual1, 60);
       else              currentWake = nap1DNH ? addMinutes(wakeTime, windowMin1 + 75) : addMinutes(sleepTarget1, 75);
@@ -232,7 +232,7 @@ function CamilleNaps() {
     // ── Noche ─────────────────────────────────────────────────
     let sleepTarget2 = addMinutes(currentWake, win2.windowMin);
 
-    if (skipNap2 || nap2DNH) {
+    if (warnNap2 || nap2DNH) {
       // Sin Siesta 2: mínimo 5:30pm, máximo ventana de 4h
       const fromWake = addMinutes(currentWake, 4 * 60);
       const finalMin = Math.max(timeToMin(fromWake), EARLIEST_BED_SKIP);
@@ -433,28 +433,28 @@ function CamilleNaps() {
               const nap = naps[i] || {};
 
               return (
-                <Card key={i} style={{ borderLeft: `4px solid ${s.skip ? "#D1D5DB" : s.color}`, opacity: (!isNight && s.skip) ? 0.6 : 1 }}>
+                <Card key={i} style={{ borderLeft: `4px solid ${s.color}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: s.skip ? "#9CA3AF" : "#111827" }}>{s.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{s.label}</div>
                       <div style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>
                         Ventana: {Math.floor(s.windowMin / 60)}h {s.windowMin % 60 > 0 ? `${s.windowMin % 60}m` : ""}
                       </div>
                     </div>
                     <div style={{
-                      background: s.skip ? "#F3F4F6" : s.color + "30",
+                      background: s.color + "30",
                       borderRadius: 20,
                       padding: "4px 12px",
                       fontSize: 12,
-                      color: s.skip ? "#9CA3AF" : s.color,
+                      color: s.color,
                       fontWeight: 700,
                     }}>
-                      {isNight ? "🌙 Noche" : s.skip ? "⏭ Saltar" : `Siesta ${i + 1}`}
+                      {isNight ? "🌙 Noche" : `Siesta ${i + 1}`}
                     </div>
                   </div>
 
-                  {/* Skip warning for Nap 2 */}
-                  {s.skip && (
+                  {/* Advisory warning for Nap 2 */}
+                  {s.warn && (
                     <div style={{
                       marginTop: 10,
                       padding: "10px 12px",
@@ -464,20 +464,18 @@ function CamilleNaps() {
                       fontSize: 13,
                       fontWeight: 600,
                     }}>
-                      ⚠️ Si hace esta siesta la noche caería después de las 7:30 pm. <strong>No hacer Siesta 2</strong> — la hora de dormir se calcula desde el último despertar.
+                      ⚠️ Si hace esta siesta, la noche podría caer después de las 8 pm. Puedes hacerla igual si lo consideras necesario.
                     </div>
                   )}
 
-                  {/* Calculated times — hide for skipped nap */}
-                  {!s.skip && (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
-                      <TimeBox icon="🚪" label="Entrar al cuarto" time={s.enterRoom} highlight />
-                      <TimeBox icon="😴" time={s.sleepTarget} label="Debe dormirse" />
-                    </div>
-                  )}
+                  {/* Calculated times */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
+                    <TimeBox icon="🚪" label="Entrar al cuarto" time={s.enterRoom} highlight />
+                    <TimeBox icon="😴" time={s.sleepTarget} label="Debe dormirse" />
+                  </div>
 
-                  {/* Actual recording (naps only, not skipped) */}
-                  {!isNight && !s.skip && (
+                  {/* Actual recording (naps only) */}
+                  {!isNight && (
                     <div style={{ marginTop: 14, borderTop: "1px solid #E5E7EB", paddingTop: 14 }}>
 
                       {/* Did not happen state */}
@@ -699,7 +697,9 @@ function CamilleNaps() {
                 💾 ¿A qué fecha corresponde?
               </div>
               <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>
-                Confirma la fecha de este registro antes de guardar.
+                {view === "lechucera"
+                  ? "Confirma la noche antes de guardar los despertares."
+                  : "Confirma la fecha de este registro antes de guardar."}
               </div>
               <input
                 type="date"
@@ -714,7 +714,11 @@ function CamilleNaps() {
               />
               <button
                 onClick={() => {
-                  saveDay(saveDate, dayData);
+                  if (view === "lechucera") {
+                    saveDay(`night-${saveDate}`, nightData);
+                  } else {
+                    saveDay(saveDate, dayData);
+                  }
                   setShowSaveModal(false);
                   alert(`✅ Guardado para el ${new Date(saveDate + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}`);
                 }}
@@ -856,6 +860,21 @@ function CamilleNaps() {
                 </div>
               </Card>
             )}
+
+            {/* SAVE BUTTON for Mili */}
+            <button
+              onClick={() => { setSaveDate(selectedNightDate); setShowSaveModal(true); }}
+              style={{
+                width: "100%", marginTop: 8, padding: "18px",
+                background: "linear-gradient(135deg, #7C4DFF, #00BCD4)",
+                color: "white", border: "none", borderRadius: 16,
+                fontSize: 18, fontWeight: 800, cursor: "pointer",
+                fontFamily: "inherit",
+                boxShadow: "0 4px 20px rgba(124,77,255,0.4)",
+              }}
+            >
+              💾 Guardar noche
+            </button>
           </div>
         )}
 
@@ -875,7 +894,11 @@ function CamilleNaps() {
             const concMins = wakings.filter(w => w.fellBackAsleepMins).map(w => w.fellBackAsleepMins);
             const avgConc = concMins.length ? Math.round(concMins.reduce((a,b)=>a+b,0)/concMins.length) : null;
             // Hours between wakings
-            const times = wakings.filter(w => w.time).map(w => timeToMin(w.time)).sort((a,b)=>a-b);
+            // Fix: hours before 6am belong to the next calendar day, add 24h
+            const times = wakings.filter(w => w.time).map(w => {
+              const mins = timeToMin(w.time);
+              return mins < 360 ? mins + 1440 : mins; // before 6am → add 24h
+            }).sort((a,b) => a-b);
             const gaps = times.slice(1).map((t,i) => t - times[i]);
             const avgGap = gaps.length ? Math.round(gaps.reduce((a,b)=>a+b,0)/gaps.length) : null;
             return { date: r.date, count: wakings.length, avgConc, avgGap, wakings, times };
@@ -945,14 +968,20 @@ function CamilleNaps() {
           function MiniBar({ values, color, maxVal }) {
             const max = maxVal || Math.max(...values, 1);
             return (
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 40 }}>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 56 }}>
                 {values.map((v, i) => (
-                  <div key={i} style={{
-                    flex: 1, background: v ? color : "#F3F4F6",
-                    height: `${Math.round((v / max) * 100)}%`,
-                    minHeight: v ? 4 : 2,
-                    borderRadius: 3,
-                  }} title={`${v}`} />
+                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: v ? color : "#9CA3AF", marginBottom: 2 }}>
+                      {v || ""}
+                    </div>
+                    <div style={{
+                      width: "100%",
+                      background: v ? color : "#F3F4F6",
+                      height: `${Math.round((v / max) * 70)}%`,
+                      minHeight: v ? 4 : 2,
+                      borderRadius: 3,
+                    }} />
+                  </div>
                 ))}
               </div>
             );
