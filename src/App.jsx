@@ -1118,7 +1118,7 @@ function CamilleNaps() {
               {/* CSV download */}
               <button
                 onClick={() => {
-                  const rows = [["Fecha","Despertar","S1 inicio","S1 fin","S1 dur (min)","S1 conc (min)","S2 inicio","S2 fin","S2 dur (min)","S2 conc (min)","Hora dormir","Despertares","Conc prom noche (min)"]];
+                  const rows = [["Fecha","Despertar","S1 inicio","S1 fin","S1 dur (min)","S1 conc (min)","S2 inicio","S2 fin","S2 dur (min)","S2 conc (min)","Hora dormir","Despertares","Conc prom noche (min)","D1 hora","D1 conc (min)","D2 hora","D2 conc (min)","D3 hora","D3 conc (min)","D4 hora","D4 conc (min)","D5 hora","D5 conc (min)","D6 hora","D6 conc (min)","D7 hora","D7 conc (min)","D8 hora","D8 conc (min)","D9 hora","D9 conc (min)","D10 hora","D10 conc (min)"]];
                   for (let i = 29; i >= 0; i--) {
                     const dateStr = getLimaDateOffset(-i);
                     const d = loadDay(dateStr);
@@ -1141,7 +1141,13 @@ function CamilleNaps() {
                     const wakings = n?.wakings || [];
                     const nightConc = wakings.filter(w=>w.fellBackAsleepMins).map(w=>w.fellBackAsleepMins);
                     const avgNightConc = nightConc.length ? Math.round(nightConc.reduce((a,b)=>a+b,0)/nightConc.length) : "";
-                    rows.push([dateStr, d.wakeTime, ...napCols, d.bedAsleep||"", wakings.length||"", avgNightConc]);
+                    // Individual wakings — up to 10
+                    const wakingCols = [];
+                    for (let wi = 0; wi < 10; wi++) {
+                      const w = wakings[wi];
+                      wakingCols.push(w?.time || "", w?.fellBackAsleepMins ?? "");
+                    }
+                    rows.push([dateStr, d.wakeTime, ...napCols, d.bedAsleep||"", wakings.length||"", avgNightConc, ...wakingCols]);
                   }
                   const csv = rows.map(r=>r.join(",")).join("\n");
                   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -1200,7 +1206,20 @@ function CamilleNaps() {
                           return { asleepAt: asleepAt||null, wokeAt: wokeAt||null, long: isNaN(dur) ? null : long, didNotHappen, timeToFallAsleep: null };
                         });
                         const bedAsleep = cols[10]?.trim() || null;
+                        // Read individual wakings from columns 13+ (D1 hora, D1 conc, D2 hora, D2 conc...)
+                        const wakings = [];
+                        for (let wi = 0; wi < 10; wi++) {
+                          const timeCol = cols[13 + wi * 2]?.trim();
+                          const concCol = cols[14 + wi * 2]?.trim();
+                          if (timeCol) {
+                            wakings.push({
+                              time: timeCol,
+                              fellBackAsleepMins: concCol ? parseInt(concCol) : null,
+                            });
+                          }
+                        }
                         saveDay(date, { wakeTime, naps, bedAsleep });
+                        if (wakings.length > 0) saveDay(`night-${date}`, { wakings });
                         imported++;
                       });
                       e.target.value = "";
