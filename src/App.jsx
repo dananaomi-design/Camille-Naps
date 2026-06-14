@@ -105,7 +105,7 @@ function CamilleNaps() {
   // ── Modo siesta ───────────────────────────────────────────────
   // napMode: "two" | "one"
   const [napMode, setNapMode] = useState(() => {
-    try { return localStorage.getItem("camille-napMode") || "two"; } catch { return "two"; }
+    try { return localStorage.getItem("camille-napMode") || "one"; } catch { return "one"; }
   });
   function setNapModePersist(m) {
     setNapMode(m);
@@ -433,136 +433,140 @@ function CamilleNaps() {
 
             {/* ── ONE NAP MODE ── */}
             {napMode === "one" && viewingDate === "today" && (() => {
+              const hasWake = wakeTime && wakeTime !== "06:00";
               const targetH = Math.floor(onNapTargetMin / 60);
               const targetM = onNapTargetMin % 60;
               const sleepTargetStr = `${String(targetH).padStart(2,"0")}:${String(targetM).padStart(2,"0")}`;
               const enterRoomStr   = addMinutes(sleepTargetStr, -ROUTINE_MIN);
               const wakeTargetStr  = addMinutes(sleepTargetStr, ONE_NAP_DUR_TARGET);
-              const nightRaw       = timeToMin(wakeTargetStr) + ONE_NAP_NIGHT_WINDOW;
-              const nightMin       = Math.min(nightRaw, ONE_NAP_NIGHT_MAX);
-              const nightStr       = `${String(Math.floor(nightMin/60)).padStart(2,"0")}:${String(nightMin%60).padStart(2,"0")}`;
-              const nightEntryStr  = addMinutes(nightStr, -ROUTINE_MIN);
               const isAtMax        = onNapTargetMin >= ONE_NAP_MAX_MIN;
+
+              // Actual nap data from dayData
+              const napAsleep = dayData.onNapAsleep || null;
+              const napWoke   = dayData.onNapWoke || null;
+              const napDur    = napAsleep && napWoke ? diffMinutes(napAsleep, napWoke) : null;
+
+              // Night calc from actual wake or estimated
+              const s1WokeStr = napWoke || (napAsleep ? addMinutes(napAsleep, ONE_NAP_DUR_TARGET) : null);
+              const nightMin  = s1WokeStr
+                ? Math.min(timeToMin(s1WokeStr) + ONE_NAP_NIGHT_WINDOW, ONE_NAP_NIGHT_MAX)
+                : null;
+              const nightStr      = nightMin ? `${String(Math.floor(nightMin/60)).padStart(2,"0")}:${String(nightMin%60).padStart(2,"0")}` : null;
+              const nightEntryStr = nightStr ? addMinutes(nightStr, -ROUTINE_MIN) : null;
 
               return (
                 <div>
-                  {/* Banner */}
-                  <Card style={{ background: "linear-gradient(135deg, #F5F3FF, #EFF6FF)", border: "2px solid #C4B5FD" }}>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: "#7C4DFF", marginBottom: 4 }}>
-                      🌟 ¡Llegó el momento de probar!
-                    </div>
-                    <div style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.5 }}>
-                      Hoy vamos con <strong>una sola siesta</strong>. El objetivo es lograr <strong>2 horas</strong> de sueño corridas. Si no llega sola, alarga en brazos hasta lograrlo.
-                    </div>
-                    {isAtMax && (
-                      <div style={{ marginTop: 8, padding: "6px 10px", background: "#D1FAE5", borderRadius: 8, fontSize: 12, color: "#065F46", fontWeight: 600 }}>
-                        🎉 ¡Llegamos al mediodía! Siesta establecida.
-                      </div>
-                    )}
-                  </Card>
-
-                  {/* Wake time */}
+                  {/* Wake time — always visible */}
                   <Card>
                     <Label>¿A qué hora despertó Camille?</Label>
-                    <input type="time" value={wakeTime} onChange={e => setWakeTime(e.target.value)} style={timeInputStyle} />
-                  </Card>
-
-                  {/* Schedule card */}
-                  <Card style={{ borderLeft: "4px solid #00BCD4" }}>
-                    <div style={{ fontSize: 17, fontWeight: 700, color: "#111827", marginBottom: 14 }}>
-                      🛌 Siesta del día
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                      <TimeBox icon="🚪" label="Entrar al cuarto" time={enterRoomStr} highlight />
-                      <TimeBox icon="😴" label="Dormida objetivo" time={sleepTargetStr} />
-                    </div>
-                    <div style={{ background: "#F0FDF4", borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontSize: 11, color: "#6B7280" }}>⏰ Alargar en brazos hasta</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: "#059669" }}>{formatTime(wakeTargetStr)}</div>
-                      </div>
-                      <div style={{ fontSize: 28 }}>💪</div>
-                    </div>
-                  </Card>
-
-                  {/* Night card */}
-                  <Card style={{ borderLeft: "4px solid #7C4DFF" }}>
-                    <div style={{ fontSize: 17, fontWeight: 700, color: "#111827", marginBottom: 14 }}>
-                      🌙 Noche
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                      <TimeBox icon="🚪" label="Entrar al cuarto" time={nightEntryStr} highlight />
-                      <TimeBox icon="😴" label="Dormida objetivo" time={nightStr} />
-                    </div>
-                    {nightMin >= ONE_NAP_NIGHT_MAX && (
-                      <div style={{ padding: "8px 12px", background: "#FEF3C7", borderRadius: 10, fontSize: 12, color: "#92400E", fontWeight: 600 }}>
-                        ⚠️ Siesta tardía — noche ajustada al límite de 6:30 pm.
-                      </div>
-                    )}
-                    <div style={{ marginTop: 12, borderTop: "1px solid #E5E7EB", paddingTop: 12 }}>
-                      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
-                      <input type="time" value={bedAsleep || ""} onChange={e => setBedAsleep(e.target.value || null)}
-                        style={{ ...timeInputStyle, pointerEvents: "auto", opacity: 1 }} />
-                    </div>
-                  </Card>
-
-                  {/* End of day: log nap duration */}
-                  <Card>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
-                      📝 ¿Cómo fue la siesta?
-                    </div>
-                    <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 10 }}>
-                      Ingresa cuánto tiempo durmió (en minutos) para calcular el objetivo de mañana.
-                    </div>
                     <input
-                      type="number" min="0" max="180" placeholder="ej. 90"
-                      value={dayData.onNapDuration || ""}
-                      onChange={e => setDayData(p => ({ ...p, onNapDuration: e.target.value ? parseInt(e.target.value) : null }))}
-                      style={{ ...timeInputStyle, fontSize: 16 }}
+                      type="time"
+                      value={wakeTime === "06:00" ? "" : wakeTime}
+                      onChange={e => setWakeTime(e.target.value || "06:00")}
+                      style={timeInputStyle}
+                      placeholder="--:--"
                     />
-                    {dayData.onNapDuration && (() => {
-                      const dur = dayData.onNapDuration;
-                      const nextTarget = dur >= 75
-                        ? Math.min(onNapTargetMin + 30, ONE_NAP_MAX_MIN)
-                        : onNapTargetMin;
-                      const advance = dur >= 75 && onNapTargetMin < ONE_NAP_MAX_MIN;
-                      return (
-                        <div style={{
-                          marginTop: 10, padding: "10px 12px", borderRadius: 10,
-                          background: advance ? "#D1FAE5" : "#FEF3C7",
-                          color: advance ? "#065F46" : "#92400E",
-                          fontSize: 13, fontWeight: 600,
-                        }}>
-                          {advance
-                            ? `✅ ${dur} min — ¡Bien! Mañana avanzamos a las ${formatTime(`${String(Math.floor(nextTarget/60)).padStart(2,"0")}:${String(nextTarget%60).padStart(2,"0")}`)}`
-                            : `⏳ ${dur} min — Repetimos el mismo horario mañana (${formatTime(sleepTargetStr)})`
-                          }
-                          {advance && (
-                            <button onClick={() => setOnNapTarget(nextTarget)} style={{
-                              display: "block", marginTop: 8, width: "100%",
-                              padding: "8px", background: "#059669", color: "white",
-                              border: "none", borderRadius: 8, fontSize: 13,
-                              fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                            }}>
-                              Actualizar objetivo para mañana →
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })()}
                   </Card>
 
-                  {/* Save */}
-                  <button onClick={() => { setSaveDate(TODAY); setShowSaveModal(true); }}
-                    style={{
+                  {/* Everything below only shows after wake is entered */}
+                  {hasWake && (<>
+                    {/* Siesta card */}
+                    <Card style={{ borderLeft: "4px solid #00BCD4" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: "#111827" }}>🛌 Siesta</div>
+                        {isAtMax && <span style={{ fontSize: 11, background: "#D1FAE5", color: "#065F46", padding: "3px 8px", borderRadius: 20, fontWeight: 700 }}>🎉 Meta lograda</span>}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                        <TimeBox icon="🚪" label="Entrar al cuarto" time={enterRoomStr} highlight />
+                        <TimeBox icon="😴" label="Dormida objetivo" time={sleepTargetStr} />
+                      </div>
+                      <div style={{ background: "#F0FDF4", borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: "#6B7280" }}>💪 Alargar en brazos hasta</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: "#059669" }}>{formatTime(wakeTargetStr)}</div>
+                        </div>
+                        <div style={{ fontSize: 28 }}>💪</div>
+                      </div>
+
+                      {/* Record actual nap */}
+                      <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 14 }}>
+                        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8, fontStyle: "italic" }}>Registrar lo que pasó:</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                          <div style={{ minWidth: 0, overflow: "hidden" }}>
+                            <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
+                            <input type="time" value={napAsleep || ""} onChange={e => setDayData(p => ({ ...p, onNapAsleep: e.target.value || null }))} style={timeInputStyle} />
+                          </div>
+                          <div style={{ minWidth: 0, overflow: "hidden" }}>
+                            <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Despertó a las</div>
+                            <input type="time" value={napWoke || ""} onChange={e => setDayData(p => ({ ...p, onNapWoke: e.target.value || null }))} style={timeInputStyle} />
+                          </div>
+                        </div>
+
+                        {/* Duration feedback */}
+                        {napDur !== null && (() => {
+                          const advance = napDur >= 75 && onNapTargetMin < ONE_NAP_MAX_MIN;
+                          const nextTarget = advance ? Math.min(onNapTargetMin + 30, ONE_NAP_MAX_MIN) : onNapTargetMin;
+                          return (
+                            <div style={{
+                              marginTop: 10, padding: "10px 12px", borderRadius: 10,
+                              background: napDur >= 75 ? "#D1FAE5" : "#FEF3C7",
+                              color: napDur >= 75 ? "#065F46" : "#92400E",
+                              fontSize: 13, fontWeight: 600,
+                            }}>
+                              {advance
+                                ? `✅ ${napDur} min — ¡Bien! Mañana avanzamos a las ${formatTime(`${String(Math.floor(nextTarget/60)).padStart(2,"0")}:${String(nextTarget%60).padStart(2,"0")}`)}`
+                                : napDur >= 75
+                                  ? `✅ ${napDur} min — ¡Meta lograda! Horario consolidado.`
+                                  : `⏳ ${napDur} min — Repetimos el mismo horario mañana`
+                              }
+                              {advance && (
+                                <button onClick={() => setOnNapTarget(nextTarget)} style={{
+                                  display: "block", marginTop: 8, width: "100%",
+                                  padding: "8px", background: "#059669", color: "white",
+                                  border: "none", borderRadius: 8, fontSize: 13,
+                                  fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                                }}>
+                                  Actualizar objetivo para mañana →
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </Card>
+
+                    {/* Night card */}
+                    {nightStr && (
+                      <Card style={{ borderLeft: "4px solid #7C4DFF" }}>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: "#111827", marginBottom: 14 }}>🌙 Noche</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                          <TimeBox icon="🚪" label="Entrar al cuarto" time={nightEntryStr} highlight />
+                          <TimeBox icon="😴" label="Dormida objetivo" time={nightStr} />
+                        </div>
+                        {nightMin >= ONE_NAP_NIGHT_MAX && (
+                          <div style={{ padding: "8px 12px", background: "#FEF3C7", borderRadius: 10, fontSize: 12, color: "#92400E", fontWeight: 600, marginBottom: 12 }}>
+                            ⚠️ Siesta tardía — noche ajustada al límite de 6:30 pm.
+                          </div>
+                        )}
+                        <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 12 }}>
+                          <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
+                          <input type="time" value={bedAsleep || ""} onChange={e => setBedAsleep(e.target.value || null)}
+                            style={{ ...timeInputStyle, pointerEvents: "auto", opacity: 1 }} />
+                        </div>
+                      </Card>
+                    )}
+
+                    {/* Save */}
+                    <button onClick={() => { setSaveDate(TODAY); setShowSaveModal(true); }} style={{
                       width: "100%", marginTop: 8, padding: "18px",
                       background: "linear-gradient(135deg, #7C4DFF, #00BCD4)",
                       color: "white", border: "none", borderRadius: 16,
                       fontSize: 18, fontWeight: 800, cursor: "pointer",
                       fontFamily: "inherit", boxShadow: "0 4px 20px rgba(124,77,255,0.4)",
                     }}>
-                    💾 Guardar día
-                  </button>
+                      💾 Guardar día
+                    </button>
+                  </>)}
                 </div>
               );
             })()}
