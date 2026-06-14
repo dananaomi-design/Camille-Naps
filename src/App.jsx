@@ -102,6 +102,27 @@ export default CamilleNapsWrapped;
 function CamilleNaps() {
   const [view, setView] = useState("nanny");
   const [viewingDate, setViewingDate] = useState("today");
+  // ── Modo siesta ───────────────────────────────────────────────
+  // napMode: "two" | "one"
+  const [napMode, setNapMode] = useState(() => {
+    try { return localStorage.getItem("camille-napMode") || "two"; } catch { return "two"; }
+  });
+  function setNapModePersist(m) {
+    setNapMode(m);
+    try { localStorage.setItem("camille-napMode", m); } catch {}
+  }
+  // One-nap progression: objetivo dormida (en minutos desde medianoche)
+  const [onNapTargetMin, setOnNapTargetMinRaw] = useState(() => {
+    try { return parseInt(localStorage.getItem("camille-onNapTarget") || String(9*60+30)); } catch { return 9*60+30; }
+  });
+  function setOnNapTarget(m) {
+    setOnNapTargetMinRaw(m);
+    try { localStorage.setItem("camille-onNapTarget", String(m)); } catch {}
+  }
+  const ONE_NAP_MAX_MIN = 12 * 60; // 12:00pm techo
+  const ONE_NAP_DUR_TARGET = 120;  // 2h objetivo
+  const ONE_NAP_NIGHT_WINDOW = 4 * 60 + 30; // 4h30 desde despertar siesta
+  const ONE_NAP_NIGHT_MAX = 18 * 60 + 30;   // 6:30pm máximo noche
 
   // ── Estado único del día ──────────────────────────────────────
   const [dayData, setDayData] = useState(
@@ -159,11 +180,13 @@ function CamilleNaps() {
     return h * 60 + m;
   }
 
-  // Hora mínima noche con Siesta 2: 6:30pm
-  // Hora mínima noche sin Siesta 2: 5:30pm
-  const BEDTIME_CUTOFF_MIN   = 20 * 60;       // 8:00 pm — si se pasa, cancelar siesta 2
-  const EARLIEST_BED_NORMAL  = 18 * 60 + 30;  // 6:30 pm — mínimo con siestas normales
-  const EARLIEST_BED_SKIP    = 17 * 60 + 30;  // 5:30 pm — mínimo si se cancela siesta 2
+  // Noche: entrada antes 6:30pm, objetivo dormida 7:00pm, nunca después 7:30pm
+  const BEDTIME_CUTOFF_MIN   = 20 * 60;       // 8:00pm — si se pasa, advertir sobre S2
+  const BEDTIME_ENTRY_MAX    = 18 * 60 + 30;  // 6:30pm — entrada máxima
+  const BEDTIME_TARGET_MAX   = 19 * 60;        // 7:00pm — objetivo dormida
+  const BEDTIME_HARD_MAX     = 19 * 60 + 30;  // 7:30pm — nunca después
+  const EARLIEST_BED_NORMAL  = 18 * 60 + 30;  // 6:30pm — mínimo con siestas normales
+  const EARLIEST_BED_SKIP    = 17 * 60 + 30;  // 5:30pm — mínimo si se cancela S2
 
   // Compute schedule from wake time + actual nap data
   function getSchedule() {
@@ -192,19 +215,49 @@ function CamilleNaps() {
     else if (actual0) currentWake = addMinutes(actual0, 60);
     else              currentWake = addMinutes(sleepTarget0, 75);
 
-    // ── Siesta 2: calcular si conviene ───────────────────────
-    const win1 = WINDOWS[1];
-    let windowMin1 = win1.windowMin;
-    // Si siesta 1 no ocurrió, ventana se recalcula desde el despertar original
-    // sumando horas que lleva despierta (ventana 1 + ventana 2)
+    // ── Siesta 2: ventana óptima basada en datos reales ──────────
+    // Óptimo: fin S1 + 2h50m (entrar) → fin S1 + 3h20m (dormida)
+    // Techo duro: 1:00pm (13:00)
+    const S2_WINDOW_ENTER = 2 * 60 + 50;  // 2h50m desde fin S1
+    const S2_WINDOW_SLEEP = 3 * 60 + 20;  // 3h20m desde fin S1
+    const S2_MAX_MIN      = 13 * 60;       // 1:00pm techo duro
+
+    let enterRoom1, sleepTarget1, s2Compressed = false;
+
     if (nap1DNH) {
-      windowMin1 = win0.windowMin + win1.windowMin;
-    } else if (naps[0].long === false) {
-      windowMin1 = Math.max(windowMin1 - 20, 150);
+      // S1 no ocurrió — usar ventana desde despertar mañana
+      const windowMin1 = win0.windowMin + WINDOWS[1].windowMin;
+      sleepTarget1 = addMinutes(wakeTime, windowMin1);
+      enterRoom1   = addMinutes(sleepTarget1, -ROUTINE_MIN);
+    } else {
+      const s1WakeMin     = timeToMin(currentWake);
+      const idealEnterMin = s1WakeMin + S2_WINDOW_ENTER;
+      const idealSleepMin = s1WakeMin + S2_WINDOW_SLEEP;
+
+      if (idealEnterMin > S2_MAX_MIN) {
+        // S1 terminó tarde — comprimir al techo
+        const hh = Math.floor(S2_MAX_MIN / 60);
+        const mm = S2_MAX_MIN % 60;
+        enterRoom1   = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+        sleepTarget1 = addMinutes(enterRoom1, ROUTINE_MIN);
+        s2Compressed = true;
+      } else if (idealSleepMin > S2_MAX_MIN + ROUTINE_MIN) {
+        // Entrada OK pero dormida pasaría el techo — comprimir solo dormida
+        const hh = Math.floor(idealEnterMin / 60);
+        const mm = idealEnterMin % 60;
+        enterRoom1   = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+        sleepTarget1 = `${String(Math.floor(S2_MAX_MIN/60)).padStart(2,"0")}:${String(S2_MAX_MIN%60).padStart(2,"0")}`;
+      } else {
+        const hh = Math.floor(idealEnterMin / 60);
+        const mm = idealEnterMin % 60;
+        enterRoom1   = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+        const sh = Math.floor(idealSleepMin / 60);
+        const sm = idealSleepMin % 60;
+        sleepTarget1 = `${String(sh).padStart(2,"0")}:${String(sm).padStart(2,"0")}`;
+      }
     }
 
-    const sleepTarget1    = addMinutes(nap1DNH ? wakeTime : currentWake, windowMin1);
-    const enterRoom1      = addMinutes(sleepTarget1, -ROUTINE_MIN);
+    const windowMin1      = diffMinutes(currentWake, sleepTarget1); // informativo
     const estWake1        = addMinutes(sleepTarget1, 75);
     const win2            = WINDOWS[2];
     const projectedBedMin = timeToMin(addMinutes(estWake1, win2.windowMin));
@@ -214,12 +267,13 @@ function CamilleNaps() {
     const woke1   = naps[1]?.wokeAt;
     const nap2DNH = naps[1]?.didNotHappen;
     schedule.push({
-      label: win1.label, color: win1.color,
+      label: WINDOWS[1].label, color: WINDOWS[1].color,
       windowMin: windowMin1,
       enterRoom: enterRoom1, sleepTarget: sleepTarget1,
       actual: actual1, woke: woke1, long: naps[1]?.long,
       currentWake: nap1DNH ? wakeTime : currentWake,
       skip: false, warn: warnNap2, didNotHappen: nap2DNH,
+      compressed: s2Compressed,
       projectedBed: addMinutes(estWake1, win2.windowMin),
     });
 
@@ -230,30 +284,29 @@ function CamilleNaps() {
     }
 
     // ── Noche ─────────────────────────────────────────────────
-    let sleepTarget2 = addMinutes(currentWake, win2.windowMin);
+    // Entrada antes 6:30pm, objetivo dormida 7:00pm, nunca después 7:30pm
+    let sleepTarget2, bedLate = false;
 
     if (warnNap2 || nap2DNH) {
-      // Sin Siesta 2: mínimo 5:30pm, máximo ventana de 4h
+      // Sin S2: mínimo 5:30pm, ventana de 4h desde último despertar
       const fromWake = addMinutes(currentWake, 4 * 60);
-      const finalMin = Math.max(timeToMin(fromWake), EARLIEST_BED_SKIP);
-      const hh = Math.floor(finalMin / 60);
-      const mm = finalMin % 60;
-      sleepTarget2 = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+      const finalMin = Math.min(Math.max(timeToMin(fromWake), EARLIEST_BED_SKIP), BEDTIME_HARD_MAX);
+      sleepTarget2 = `${String(Math.floor(finalMin/60)).padStart(2,"0")}:${String(finalMin%60).padStart(2,"0")}`;
     } else {
-      // Con siestas normales: nunca antes de las 6:30pm
-      const normalMin = Math.max(timeToMin(sleepTarget2), EARLIEST_BED_NORMAL);
-      const hh = Math.floor(normalMin / 60);
-      const mm = normalMin % 60;
-      sleepTarget2 = `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+      // Con S2: objetivo 7pm, nunca después de 7:30pm
+      const calcMin = timeToMin(addMinutes(currentWake, win2.windowMin));
+      if (calcMin > BEDTIME_HARD_MAX) bedLate = true;
+      const clampedMin = Math.min(Math.max(calcMin, EARLIEST_BED_NORMAL), BEDTIME_HARD_MAX);
+      sleepTarget2 = `${String(Math.floor(clampedMin/60)).padStart(2,"0")}:${String(clampedMin%60).padStart(2,"0")}`;
     }
-    const enterRoom2   = addMinutes(sleepTarget2, -ROUTINE_MIN);
+    const enterRoom2 = addMinutes(sleepTarget2, -ROUTINE_MIN);
 
     schedule.push({
       label: win2.label, color: win2.color,
       windowMin: win2.windowMin,
       enterRoom: enterRoom2, sleepTarget: sleepTarget2,
       actual: bedAsleep, woke: null, long: null,
-      currentWake, skip: false,
+      currentWake, skip: false, bedLate,
     });
 
     return schedule;
@@ -363,26 +416,199 @@ function CamilleNaps() {
         {/* ── NANNY VIEW ── */}
         {view === "nanny" && (
           <div>
-            {/* Day navigator */}
+            {/* Mode toggle */}
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-              {[["yesterday", "← Ayer"], ["today", "Hoy"]].map(([val, label]) => (
-                <button key={val} onClick={() => setViewingDate(val)} style={{
-                  flex: 1,
-                  padding: "8px 0",
-                  border: "2px solid",
-                  borderColor: viewingDate === val ? "#7C4DFF" : "#E5E7EB",
+              {[["two", "🛌🛌 Dos siestas"], ["one", "🛌 Una siesta"]].map(([m, label]) => (
+                <button key={m} onClick={() => setNapModePersist(m)} style={{
+                  flex: 1, padding: "8px 0", border: "2px solid",
+                  borderColor: napMode === m ? "#7C4DFF" : "#E5E7EB",
                   borderRadius: 10,
-                  background: viewingDate === val ? "#F5F3FF" : "white",
-                  color: viewingDate === val ? "#7C4DFF" : "#6B7280",
-                  fontWeight: viewingDate === val ? 700 : 400,
-                  fontSize: 13,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
+                  background: napMode === m ? "#F5F3FF" : "white",
+                  color: napMode === m ? "#7C4DFF" : "#6B7280",
+                  fontWeight: napMode === m ? 700 : 400,
+                  fontSize: 12, cursor: "pointer", fontFamily: "inherit",
                 }}>{label}</button>
               ))}
             </div>
-            {/* Yesterday read-only view */}
-            {viewingDate === "yesterday" && (
+
+            {/* ── ONE NAP MODE ── */}
+            {napMode === "one" && viewingDate === "today" && (() => {
+              const targetH = Math.floor(onNapTargetMin / 60);
+              const targetM = onNapTargetMin % 60;
+              const sleepTargetStr = `${String(targetH).padStart(2,"0")}:${String(targetM).padStart(2,"0")}`;
+              const enterRoomStr   = addMinutes(sleepTargetStr, -ROUTINE_MIN);
+              const wakeTargetStr  = addMinutes(sleepTargetStr, ONE_NAP_DUR_TARGET);
+              const nightRaw       = timeToMin(wakeTargetStr) + ONE_NAP_NIGHT_WINDOW;
+              const nightMin       = Math.min(nightRaw, ONE_NAP_NIGHT_MAX);
+              const nightStr       = `${String(Math.floor(nightMin/60)).padStart(2,"0")}:${String(nightMin%60).padStart(2,"0")}`;
+              const nightEntryStr  = addMinutes(nightStr, -ROUTINE_MIN);
+              const isAtMax        = onNapTargetMin >= ONE_NAP_MAX_MIN;
+
+              return (
+                <div>
+                  {/* Banner */}
+                  <Card style={{ background: "linear-gradient(135deg, #F5F3FF, #EFF6FF)", border: "2px solid #C4B5FD" }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#7C4DFF", marginBottom: 4 }}>
+                      🌟 ¡Llegó el momento de probar!
+                    </div>
+                    <div style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.5 }}>
+                      Hoy vamos con <strong>una sola siesta</strong>. El objetivo es lograr <strong>2 horas</strong> de sueño corridas. Si no llega sola, alarga en brazos hasta lograrlo.
+                    </div>
+                    {isAtMax && (
+                      <div style={{ marginTop: 8, padding: "6px 10px", background: "#D1FAE5", borderRadius: 8, fontSize: 12, color: "#065F46", fontWeight: 600 }}>
+                        🎉 ¡Llegamos al mediodía! Siesta establecida.
+                      </div>
+                    )}
+                  </Card>
+
+                  {/* Wake time */}
+                  <Card>
+                    <Label>¿A qué hora despertó Camille?</Label>
+                    <input type="time" value={wakeTime} onChange={e => setWakeTime(e.target.value)} style={timeInputStyle} />
+                  </Card>
+
+                  {/* Schedule card */}
+                  <Card style={{ borderLeft: "4px solid #00BCD4" }}>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#111827", marginBottom: 14 }}>
+                      🛌 Siesta del día
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                      <TimeBox icon="🚪" label="Entrar al cuarto" time={enterRoomStr} highlight />
+                      <TimeBox icon="😴" label="Dormida objetivo" time={sleepTargetStr} />
+                    </div>
+                    <div style={{ background: "#F0FDF4", borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#6B7280" }}>⏰ Alargar en brazos hasta</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: "#059669" }}>{formatTime(wakeTargetStr)}</div>
+                      </div>
+                      <div style={{ fontSize: 28 }}>💪</div>
+                    </div>
+                  </Card>
+
+                  {/* Night card */}
+                  <Card style={{ borderLeft: "4px solid #7C4DFF" }}>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#111827", marginBottom: 14 }}>
+                      🌙 Noche
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                      <TimeBox icon="🚪" label="Entrar al cuarto" time={nightEntryStr} highlight />
+                      <TimeBox icon="😴" label="Dormida objetivo" time={nightStr} />
+                    </div>
+                    {nightMin >= ONE_NAP_NIGHT_MAX && (
+                      <div style={{ padding: "8px 12px", background: "#FEF3C7", borderRadius: 10, fontSize: 12, color: "#92400E", fontWeight: 600 }}>
+                        ⚠️ Siesta tardía — noche ajustada al límite de 6:30 pm.
+                      </div>
+                    )}
+                    <div style={{ marginTop: 12, borderTop: "1px solid #E5E7EB", paddingTop: 12 }}>
+                      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
+                      <input type="time" value={bedAsleep || ""} onChange={e => setBedAsleep(e.target.value || null)}
+                        style={{ ...timeInputStyle, pointerEvents: "auto", opacity: 1 }} />
+                    </div>
+                  </Card>
+
+                  {/* End of day: log nap duration */}
+                  <Card>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
+                      📝 ¿Cómo fue la siesta?
+                    </div>
+                    <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 10 }}>
+                      Ingresa cuánto tiempo durmió (en minutos) para calcular el objetivo de mañana.
+                    </div>
+                    <input
+                      type="number" min="0" max="180" placeholder="ej. 90"
+                      value={dayData.onNapDuration || ""}
+                      onChange={e => setDayData(p => ({ ...p, onNapDuration: e.target.value ? parseInt(e.target.value) : null }))}
+                      style={{ ...timeInputStyle, fontSize: 16 }}
+                    />
+                    {dayData.onNapDuration && (() => {
+                      const dur = dayData.onNapDuration;
+                      const nextTarget = dur >= 75
+                        ? Math.min(onNapTargetMin + 30, ONE_NAP_MAX_MIN)
+                        : onNapTargetMin;
+                      const advance = dur >= 75 && onNapTargetMin < ONE_NAP_MAX_MIN;
+                      return (
+                        <div style={{
+                          marginTop: 10, padding: "10px 12px", borderRadius: 10,
+                          background: advance ? "#D1FAE5" : "#FEF3C7",
+                          color: advance ? "#065F46" : "#92400E",
+                          fontSize: 13, fontWeight: 600,
+                        }}>
+                          {advance
+                            ? `✅ ${dur} min — ¡Bien! Mañana avanzamos a las ${formatTime(`${String(Math.floor(nextTarget/60)).padStart(2,"0")}:${String(nextTarget%60).padStart(2,"0")}`)}`
+                            : `⏳ ${dur} min — Repetimos el mismo horario mañana (${formatTime(sleepTargetStr)})`
+                          }
+                          {advance && (
+                            <button onClick={() => setOnNapTarget(nextTarget)} style={{
+                              display: "block", marginTop: 8, width: "100%",
+                              padding: "8px", background: "#059669", color: "white",
+                              border: "none", borderRadius: 8, fontSize: 13,
+                              fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                            }}>
+                              Actualizar objetivo para mañana →
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </Card>
+
+                  {/* Save */}
+                  <button onClick={() => { setSaveDate(TODAY); setShowSaveModal(true); }}
+                    style={{
+                      width: "100%", marginTop: 8, padding: "18px",
+                      background: "linear-gradient(135deg, #7C4DFF, #00BCD4)",
+                      color: "white", border: "none", borderRadius: 16,
+                      fontSize: 18, fontWeight: 800, cursor: "pointer",
+                      fontFamily: "inherit", boxShadow: "0 4px 20px rgba(124,77,255,0.4)",
+                    }}>
+                    💾 Guardar día
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* ── ONE NAP YESTERDAY ── */}
+            {napMode === "one" && viewingDate === "yesterday" && (
+              <Card style={{ borderLeft: "4px solid #9CA3AF" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>📋 Resumen de ayer</div>
+                {yesterdayData ? (() => {
+                  const yd = yesterdayData;
+                  return (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                        <span style={{ color: "#6B7280" }}>☀️ Despertar</span>
+                        <span style={{ fontWeight: 600 }}>{yd.wake_time ? formatTime(yd.wake_time) : "—"}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                        <span style={{ color: "#6B7280" }}>🛌 Duración siesta</span>
+                        <span style={{ fontWeight: 600 }}>{yd.onNapDuration ? `${yd.onNapDuration} min` : "—"}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                        <span style={{ color: "#6B7280" }}>🌙 Noche</span>
+                        <span style={{ fontWeight: 600 }}>{yd.bedAsleep ? formatTime(yd.bedAsleep) : "—"}</span>
+                      </div>
+                    </div>
+                  );
+                })() : <div style={{ color: "#9CA3AF", fontSize: 13 }}>No hay datos de ayer.</div>}
+              </Card>
+            )}
+
+            {/* ── TWO NAP MODE ── */}
+            {napMode === "two" && (<>
+              {/* Day navigator */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                {[["yesterday", "← Ayer"], ["today", "Hoy"]].map(([val, label]) => (
+                  <button key={val} onClick={() => setViewingDate(val)} style={{
+                    flex: 1, padding: "8px 0", border: "2px solid",
+                    borderColor: viewingDate === val ? "#7C4DFF" : "#E5E7EB",
+                    borderRadius: 10,
+                    background: viewingDate === val ? "#F5F3FF" : "white",
+                    color: viewingDate === val ? "#7C4DFF" : "#6B7280",
+                    fontWeight: viewingDate === val ? 700 : 400,
+                    fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                  }}>{label}</button>
+                ))}
+              </div>
               <Card style={{ borderLeft: "4px solid #9CA3AF" }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 12 }}>
                   📋 Resumen de ayer
@@ -465,6 +691,16 @@ function CamilleNaps() {
                       fontWeight: 600,
                     }}>
                       ⚠️ Si hace esta siesta, la noche podría caer después de las 8 pm. Puedes hacerla igual si lo consideras necesario.
+                    </div>
+                  )}
+
+                  {/* Compressed window warning */}
+                  {s.compressed && (
+                    <div style={{
+                      marginTop: 10, padding: "10px 12px", borderRadius: 10,
+                      background: "#FEE2E2", color: "#991B1B", fontSize: 13, fontWeight: 600,
+                    }}>
+                      ⏰ S1 terminó tarde — ventana comprimida al límite de 1:00 pm.
                     </div>
                   )}
 
@@ -610,7 +846,15 @@ function CamilleNaps() {
                     </div>
                   )}
 
-                  {/* Bedtime recording — always shown for night card */}
+                  {/* Late bedtime warning */}
+                  {isNight && s.bedLate && (
+                    <div style={{
+                      marginTop: 10, padding: "10px 12px", borderRadius: 10,
+                      background: "#FEE2E2", color: "#991B1B", fontSize: 13, fontWeight: 600,
+                    }}>
+                      ⏰ Noche tardía — ajustada al límite de 7:30 pm.
+                    </div>
+                  )}
                   {isNight && (
                     <div style={{ marginTop: 14, borderTop: "1px solid #E5E7EB", paddingTop: 14 }}>
                       <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 4 }}>Se durmió a las</div>
@@ -680,6 +924,7 @@ function CamilleNaps() {
               💾 Guardar día
             </button>
             )}
+            </>)}
           </div>
         )}
 
